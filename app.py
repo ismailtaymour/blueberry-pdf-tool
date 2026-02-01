@@ -4,15 +4,19 @@ from bs4 import BeautifulSoup
 import tempfile
 import re
 
-# --- 1. CLEANING ---
+# --- 1. ROBUST TEXT SANITIZATION ---
 def clean_text(text):
     if not text: return ""
+    # Smart quotes and symbols map
     replacements = {
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
-        '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' '
+        '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' ',
+        '–': '-', '—': '-'
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
+    
+    # Force encode to Latin-1 to prevent FPDF crashes with emojis/Arabic/Chinese
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
 def safe_get_text(element):
@@ -22,7 +26,7 @@ def safe_get_text(element):
 # --- 2. PDF ENGINE ---
 class PDF(FPDF):
     def header(self):
-        self.set_fill_color(30, 60, 114)
+        self.set_fill_color(30, 60, 114) # Deep Blue
         self.rect(0, 0, 210, 45, 'F')
         self.set_font('Arial', 'B', 22)
         self.set_text_color(255, 255, 255)
@@ -62,10 +66,12 @@ class PDF(FPDF):
         self.set_line_width(0.5)
         start_y = self.get_y()
         self.rect(10, start_y, 190, 35, 'DF')
+        
         self.set_xy(15, start_y + 5)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(192, 57, 43)
         self.cell(0, 5, clean_text(title), 0, 1)
+        
         self.set_xy(15, start_y + 12)
         self.set_font('Arial', '', 10)
         self.set_text_color(60, 0, 0)
@@ -75,33 +81,49 @@ class PDF(FPDF):
 
     def content_card(self, ticker, name, setup_type, details, table_data, rationale, confidence, mode='buy'):
         self.check_page_break(80)
-        head_fill = (231, 76, 60) if mode == 'sell' else (52, 152, 219)
-        badge_fill = (192, 57, 43) if mode == 'sell' else (46, 204, 113)
+        
+        # Color Logic
+        if mode == 'sell':
+            head_fill = (231, 76, 60) # Red
+            badge_fill = (192, 57, 43)
+        elif mode == 'open':
+            head_fill = (46, 204, 113) # Green for active positions
+            badge_fill = (39, 174, 96)
+        else: # buy
+            head_fill = (52, 152, 219) # Blue
+            badge_fill = (41, 128, 185)
 
+        # Draw Header
         self.set_fill_color(*head_fill)
         self.set_text_color(255, 255, 255)
         self.set_font('Arial', 'B', 12)
         self.cell(25, 8, f" {clean_text(ticker)}", 0, 0, 'L', fill=True)
+        
         self.set_text_color(80, 80, 80)
         self.set_font('Arial', '', 10)
         self.cell(100, 8, f"  {clean_text(name)}", 0, 0, 'L')
+        
         self.set_fill_color(*badge_fill)
         self.set_text_color(255, 255, 255)
         self.set_font('Arial', 'B', 8)
         self.cell(65, 8, clean_text(setup_type), 0, 1, 'C', fill=True)
         self.ln(2)
 
+        # Details
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', '', 9)
         for line in details:
             self.multi_cell(0, 5, clean_text(line))
             self.ln(1)
 
+        # Data Table
         if table_data:
             self.ln(2)
             self.set_font('Arial', 'B', 8)
             self.set_fill_color(245, 245, 245)
             self.set_draw_color(200, 200, 200)
+            
+            # Draw Columns
             col_width = 190 / len(table_data)
             for key in table_data.keys():
                 self.cell(col_width, 6, clean_text(key), 1, 0, 'C', fill=True)
@@ -111,6 +133,7 @@ class PDF(FPDF):
                 self.cell(col_width, 8, clean_text(str(val)), 1, 0, 'C')
             self.ln(10)
 
+        # Rationale
         if rationale:
             self.set_fill_color(245, 248, 250)
             self.rect(10, self.get_y(), 190, 15, 'F')
@@ -118,6 +141,7 @@ class PDF(FPDF):
             self.set_font('Arial', 'I', 9)
             self.multi_cell(186, 5, f"Rationale: {clean_text(rationale)}")
         
+        # Confidence
         if confidence:
             self.ln(2)
             self.set_font('Arial', 'B', 9)
@@ -146,53 +170,47 @@ class PDF(FPDF):
         self.multi_cell(180, 4, clean_text(text))
         self.ln(5)
 
-# --- 3. BOTTOM-UP PARSER ---
+# --- 3. UNIVERSAL PARSER (Iterates Cards) ---
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     pdf = PDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # 1. ALERT BOX (Heuristic)
-    alert = None
-    # Look for the specific text "EXTREME CAUTION" or the class
-    caution_txt = soup.find(string=re.compile("EXTREME CAUTION"))
-    if caution_txt:
-        # Walk up to find the container
-        alert = caution_txt.find_parent(class_='alert-box') or caution_txt.find_parent('div')
-
+    # 1. ALERT BOX
+    alert = soup.find(class_='alert-box') or soup.find(string=re.compile("EXTREME CAUTION"))
     if alert:
-        title = safe_get_text(alert.find(['h3','h4','strong']))
+        if hasattr(alert, 'find_parent'):
+             if not 'alert-box' in str(alert): alert = alert.find_parent(class_='alert-box') or alert.find_parent('div')
+        
+        title = safe_get_text(alert.find(['h3', 'h4', 'strong']))
         text = safe_get_text(alert.find('p'))
-        pdf.alert_box(title, text)
+        if title: pdf.alert_box(title, text)
 
-    # 2. INDEX STATUS (Heuristic: "Current Level" text)
-    idx_label = soup.find(string=re.compile("Current Level"))
-    if idx_label:
-        # The container is usually a few levels up
-        idx_card = idx_label.find_parent(class_='index-card') or idx_label.find_parent('div').find_parent('div')
-        
-        pdf.section_header("Index Technical Status")
-        pdf.set_font('Arial', '', 9)
-        pdf.set_fill_color(250, 250, 250)
-        
-        rows = idx_card.find_all(class_='metric-row')
-        for i in range(0, len(rows), 2):
-            l1 = safe_get_text(rows[i].find(class_='metric-label'))
-            v1 = safe_get_text(rows[i].find(class_='metric-value'))
-            pdf.cell(35, 7, clean_text(l1), 1, 0, 'L', fill=True)
-            pdf.cell(60, 7, clean_text(v1), 1, 0, 'L')
-            
-            if i + 1 < len(rows):
-                l2 = safe_get_text(rows[i+1].find(class_='metric-label'))
-                v2 = safe_get_text(rows[i+1].find(class_='metric-value'))
-                pdf.cell(35, 7, clean_text(l2), 1, 0, 'L', fill=True)
-                pdf.cell(60, 7, clean_text(v2), 1, 1, 'L')
-            else:
-                pdf.ln()
+    # 2. INDEX STATUS
+    idx_anchor = soup.find(string=re.compile("Current Level"))
+    if idx_anchor:
+        idx_card = idx_anchor.find_parent(class_='index-card') or idx_anchor.find_parent('div').find_parent('div')
+        if idx_card:
+            pdf.section_header("Index Technical Status")
+            pdf.set_font('Arial', '', 9)
+            pdf.set_fill_color(250, 250, 250)
+            rows = idx_card.find_all(class_='metric-row')
+            for i in range(0, len(rows), 2):
+                l1 = safe_get_text(rows[i].find(class_='metric-label'))
+                v1 = safe_get_text(rows[i].find(class_='metric-value'))
+                pdf.cell(35, 7, clean_text(l1), 1, 0, 'L', fill=True)
+                pdf.cell(60, 7, clean_text(v1), 1, 0, 'L')
+                
+                if i+1 < len(rows):
+                    l2 = safe_get_text(rows[i+1].find(class_='metric-label'))
+                    v2 = safe_get_text(rows[i+1].find(class_='metric-value'))
+                    pdf.cell(35, 7, clean_text(l2), 1, 0, 'L', fill=True)
+                    pdf.cell(60, 7, clean_text(v2), 1, 1, 'L')
+                else: pdf.ln()
 
-    # 3. MARKET ASSESSMENT (Heuristic: Header)
-    assess_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Market Trend Assessment' in safe_get_text(t))
+    # 3. MARKET ASSESSMENT
+    assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend Assessment' in safe_get_text(t))
     if assess_header:
         pdf.section_header("Market Trend Assessment")
         content = assess_header.find_next_sibling('div') or assess_header.parent.find(class_='market-assessment')
@@ -209,106 +227,101 @@ def parse_and_generate_pdf(html_content):
                     pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
                     pdf.ln(2)
 
-    # 4. CARDS (The Fix: Find Params -> Find Parent -> Find Ticker)
-    # This works even if Ticker and Params are separated by Tabs structure
+    # 4. CARD EXTRACTION (Unified)
+    # Identify all cards first
+    all_cards = soup.find_all(class_='setup-card')
     
-    # Find all "Entry Range" labels. These are anchors for every card.
-    entry_labels = soup.find_all(string=re.compile("Entry Range"))
-    
-    buys = []
-    sells = []
-    seen_tickers = set()
+    buys, sells, opens = [], [], []
 
-    for label in entry_labels:
-        # 1. Find the Params Container
-        params_div = label.find_parent(class_='trade-params') or label.find_parent('div').find_parent('div')
-        if not params_div: continue
-        
-        # 2. Find the Card Container (Climb up until we find a Ticker or Company Name)
-        card = params_div
-        ticker_el = None
-        
-        # Climb up max 6 levels to find a common ancestor with the ticker
-        for _ in range(6):
-            if not card.parent: break
-            card = card.parent
-            # Check if this parent contains a ticker class
-            ticker_el = card.find(class_='ticker')
-            if ticker_el: break
-            
-        if not ticker_el: continue # Orphaned table, skip
-        
-        ticker_text = safe_get_text(ticker_el)
-        if ticker_text in seen_tickers: continue
-        seen_tickers.add(ticker_text)
-
-        # 3. Now we have the Card and the Ticker. Extract everything.
+    for card in all_cards:
+        # --- A. DATA EXTRACTION ---
+        ticker = safe_get_text(card.find(class_='ticker'))
         name = safe_get_text(card.find(class_='company-name'))
         setup_el = card.find(class_='setup-type')
         setup = safe_get_text(setup_el)
         
-        mode = 'buy'
-        if setup_el:
-            classes = setup_el.get('class', [])
-            if 'exit' in setup.lower() or 'reduce' in setup.lower() or 'sell' in setup.lower() or 'setup-type-exit' in classes:
-                mode = 'sell'
-                
         # Details
         details_div = card.find(class_='technical-details')
         details = [safe_get_text(p) for p in details_div.find_all('p')] if details_div else []
         
-        # Table (Use the params_div we found at start)
+        # Table
         table = {}
-        for box in params_div.find_all(class_='param-box'):
-            lbl = safe_get_text(box.find(class_='param-label'))
-            val = safe_get_text(box.find(class_='param-value'))
-            if lbl: table[lbl] = val
-
-        # Rationale & Confidence
-        rationale_div = card.find(class_='rationale')
-        rationale = safe_get_text(rationale_div).replace("Rationale:", "").strip() if rationale_div else ""
+        params_div = card.find(class_='trade-params')
+        if params_div:
+            for box in params_div.find_all(class_='param-box'):
+                lbl = safe_get_text(box.find(class_='param-label'))
+                val = safe_get_text(box.find(class_='param-value'))
+                if lbl: table[lbl] = val
         
-        conf_div = card.find(class_='confidence')
-        conf = safe_get_text(conf_div) if conf_div else ""
+        # Rationale & Confidence
+        rationale = safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip()
+        conf = safe_get_text(card.find(class_='confidence'))
 
-        data = {'t': ticker_text, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode}
-        if mode == 'sell': sells.append(data)
-        else: buys.append(data)
+        # --- B. CATEGORIZATION LOGIC ---
+        # 1. Check parent for "Open Positions" context
+        parent_text = ""
+        curr = card.parent
+        for _ in range(3): # Look up 3 levels
+            if curr:
+                if curr.get('id') == 'tab-open': parent_text = "open"
+                if "Open Positions" in safe_get_text(curr.find_previous_sibling(['h2', 'div'])): parent_text = "open"
+                curr = curr.parent
+        
+        # 2. Check internal keywords
+        is_sell = False
+        is_open = False
+        
+        if 'open' in parent_text:
+            is_open = True
+        elif 'P&L' in str(table) or 'Entry Date' in str(table): 
+            is_open = True
+        elif 'Exit' in setup or 'Reduce' in setup or 'Sell' in setup:
+            is_sell = True
+        elif setup_el and 'setup-type-exit' in setup_el.get('class', []):
+            is_sell = True
+            
+        data = {'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf}
+        
+        if is_open:
+            opens.append(data)
+        elif is_sell:
+            sells.append(data)
+        else:
+            buys.append(data)
+
+    # --- C. RENDER SECTIONS ---
+    if opens:
+        pdf.section_header("Open Positions Management")
+        for c in opens: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='open')
 
     if buys:
         pdf.section_header("Top Buy Opportunities")
-        for c in buys:
-            pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], c['m'])
-            
+        for c in buys: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='buy')
+    
     if sells:
         pdf.section_header("Reduce/Exit Recommendations")
-        for c in sells:
-            pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], c['m'])
+        for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
     # 5. WATCHLIST
-    wl_items = soup.find_all(class_='watchlist-item')
-    if wl_items:
+    wl_section = soup.find(class_='watchlist')
+    if wl_section:
         pdf.section_header("Watchlist - Additional Opportunities")
-        for item in wl_items:
+        for item in wl_section.find_all(class_='watchlist-item'):
             pdf.check_page_break(35)
             pdf.set_fill_color(255, 248, 240)
             pdf.rect(10, pdf.get_y(), 190, 30, 'F')
             pdf.set_xy(15, pdf.get_y() + 5)
-            
             h4 = safe_get_text(item.find('h4'))
             pdf.set_font('Arial', 'B', 10)
             pdf.cell(0, 5, clean_text(h4), 0, 1)
-            
-            ps = item.find_all('p')
             pdf.set_font('Arial', '', 9)
-            for p in ps:
-                pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
+            for p in item.find_all('p'): pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
             pdf.ln(5)
 
     # 6. NOTES
     notes_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Technical Market Notes' in safe_get_text(t))
     if notes_header:
-        notes_div = notes_header.find_next_sibling('div') or soup.find(class_='market-notes')
+        notes_div = notes_header.find_next_sibling('div') or soup.find(class_='market-notes') or soup.find(class_='notes-section')
         if notes_div:
             pdf.add_page()
             pdf.section_header("Technical Market Notes")
@@ -320,7 +333,7 @@ def parse_and_generate_pdf(html_content):
     # 7. DISCLAIMER
     disc = soup.find(class_='disclaimer')
     if disc:
-        title = safe_get_text(disc.find('h4')) or "Important Disclaimer"
+        title = safe_get_text(disc.find('h3')) or safe_get_text(disc.find('h4')) or "Important Disclaimer"
         text = safe_get_text(disc).replace(title, "").strip()
         pdf.disclaimer_box(title, text)
 
@@ -338,24 +351,17 @@ if uploaded_file is not None:
         with st.spinner("Parsing and Formatting..."):
             try:
                 bytes_data = uploaded_file.getvalue()
-                try:
-                    html_content = bytes_data.decode("utf-8")
-                except:
-                    html_content = bytes_data.decode("latin-1", errors="ignore")
+                # Try UTF-8 then Latin-1
+                try: html_content = bytes_data.decode("utf-8")
+                except: html_content = bytes_data.decode("latin-1", errors="ignore")
                 
                 pdf = parse_and_generate_pdf(html_content)
                 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                     pdf.output(tmp.name)
-                    with open(tmp.name, "rb") as f:
-                        pdf_bytes = f.read()
+                    with open(tmp.name, "rb") as f: pdf_bytes = f.read()
                 
                 st.success("PDF Generated Successfully!")
-                st.download_button(
-                    label="📥 Download Styled PDF",
-                    data=pdf_bytes,
-                    file_name="BlueberryAI_Market_Report.pdf",
-                    mime="application/pdf"
-                )
+                st.download_button("📥 Download Styled PDF", pdf_bytes, "BlueberryAI_Market_Report.pdf", "application/pdf")
             except Exception as e:
                 st.error(f"Error processing file: {e}")
