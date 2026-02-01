@@ -3,7 +3,7 @@ from fpdf import FPDF
 from bs4 import BeautifulSoup
 import tempfile
 
-# --- 1. SANITIZATION HELPER ---
+# --- 1. ROBUST TEXT SANITIZATION ---
 def clean_text(text):
     if not text: return ""
     replacements = {
@@ -12,10 +12,14 @@ def clean_text(text):
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-    # Strip non-latin characters to prevent PDF crashes
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# --- 2. PDF GENERATION ENGINE ---
+def safe_get_text(element, default=""):
+    if element and hasattr(element, 'get_text'):
+        return element.get_text(strip=True)
+    return default
+
+# --- 2. PDF ENGINE ---
 class PDF(FPDF):
     def header(self):
         self.set_fill_color(30, 60, 114)
@@ -129,20 +133,14 @@ class PDF(FPDF):
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(5)
 
-# --- 3. ROBUST HTML PARSER (SAFE VERSION) ---
-def safe_get_text(element, default=""):
-    """Safely extracts text from an element, returning default if missing."""
-    if element and hasattr(element, 'get_text'):
-        return element.get_text(strip=True)
-    return default
-
+# --- 3. UNIVERSAL HTML PARSER ---
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     pdf = PDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # 1. Alert Box
+    # --- 1. ALERT BOX ---
     alert = soup.find(class_='alert-box')
     if alert:
         title = safe_get_text(alert.find('h3'))
@@ -150,7 +148,7 @@ def parse_and_generate_pdf(html_content):
         if title or text:
             pdf.alert_box(title, text)
 
-    # 2. Index Status
+    # --- 2. INDEX STATUS ---
     index_card = soup.find(class_='index-card')
     if index_card:
         pdf.section_header("Index Technical Status")
@@ -171,7 +169,7 @@ def parse_and_generate_pdf(html_content):
             else:
                 pdf.ln()
 
-    # 3. Market Assessment
+    # --- 3. MARKET ASSESSMENT ---
     assess = soup.find(class_='market-assessment')
     if assess:
         pdf.section_header("Market Trend Assessment")
@@ -187,50 +185,68 @@ def parse_and_generate_pdf(html_content):
                 pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
                 pdf.ln(2)
 
-    # 4. Process Cards (Buy/Sell)
-    sections = soup.find_all(class_='section')
-    for section in sections:
-        title_el = section.find(class_='section-title')
-        if not title_el: continue
-        title_text = safe_get_text(title_el)
-        
-        if any(x in title_text for x in ["Index", "Assessment", "Watchlist", "Notes"]):
-            continue
-            
-        pdf.section_header(title_text)
-        mode = 'sell' if "Reduce" in title_text or "Sell" in title_text else 'buy'
-        
-        cards = section.find_all(class_='setup-card')
-        for card in cards:
-            ticker = safe_get_text(card.find(class_='ticker'))
-            name = safe_get_text(card.find(class_='company-name'))
-            setup = safe_get_text(card.find(class_='setup-type'))
-            
-            details_div = card.find(class_='technical-details')
-            details = [safe_get_text(p) for p in details_div.find_all('p')] if details_div else []
-            
-            table_data = {}
-            params = card.find(class_='trade-params')
-            if params:
-                boxes = params.find_all(class_='param-box')
-                for box in boxes:
-                    lbl = safe_get_text(box.find(class_='param-label'))
-                    val = safe_get_text(box.find(class_='param-value'))
-                    if lbl: table_data[lbl] = val
-            
-            rationale_div = card.find(class_='rationale')
-            rationale = safe_get_text(rationale_div).replace("Rationale:", "").strip() if rationale_div else ""
-            
-            conf = safe_get_text(card.find(class_='confidence'))
-            
-            pdf.content_card(ticker, name, setup, details, table_data, rationale, conf, mode)
+    # --- 4. CARDS (BUY & SELL) - Universal Search ---
+    # Find ALL setup cards regardless of page structure (Tabs vs List)
+    all_cards = soup.find_all(class_='setup-card')
+    buys = []
+    sells = []
 
-    # 5. Watchlist
-    wl = soup.find(class_='watchlist')
-    if wl:
+    for card in all_cards:
+        # Detect type based on CSS class or content
+        setup_type_el = card.find(class_='setup-type')
+        is_sell = False
+        
+        # Check for exit class or keywords
+        if setup_type_el:
+            classes = setup_type_el.get('class', [])
+            text_type = safe_get_text(setup_type_el).lower()
+            if 'setup-type-exit' in classes or 'exit' in text_type or 'reduce' in text_type:
+                is_sell = True
+        
+        card_data = {
+            'ticker': safe_get_text(card.find(class_='ticker')),
+            'name': safe_get_text(card.find(class_='company-name')),
+            'setup': safe_get_text(card.find(class_='setup-type')),
+            'details': [safe_get_text(p) for p in card.find(class_='technical-details').find_all('p')] if card.find(class_='technical-details') else [],
+            'table': {},
+            'rationale': safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip(),
+            'conf': safe_get_text(card.find(class_='confidence')),
+            'mode': 'sell' if is_sell else 'buy'
+        }
+        
+        # Extract Table
+        params = card.find(class_='trade-params')
+        if params:
+            for box in params.find_all(class_='param-box'):
+                lbl = safe_get_text(box.find(class_='param-label'))
+                val = safe_get_text(box.find(class_='param-value'))
+                if lbl: card_data['table'][lbl] = val
+
+        if is_sell:
+            sells.append(card_data)
+        else:
+            buys.append(card_data)
+
+    # Render Buys
+    if buys:
+        pdf.section_header("Top Buy Opportunities")
+        for c in buys:
+            pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], 
+                             c['table'], c['rationale'], c['conf'], mode='buy')
+
+    # Render Sells
+    if sells:
+        pdf.section_header("Reduce/Exit Recommendations")
+        for c in sells:
+            pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], 
+                             c['table'], c['rationale'], c['conf'], mode='sell')
+
+    # --- 5. WATCHLIST ---
+    # Global search for watchlist items
+    wl_items = soup.find_all(class_='watchlist-item')
+    if wl_items:
         pdf.section_header("Watchlist - Additional Opportunities")
-        items = wl.find_all(class_='watchlist-item')
-        for item in items:
+        for item in wl_items:
             pdf.check_page_break(35)
             pdf.set_fill_color(255, 248, 240)
             pdf.rect(10, pdf.get_y(), 190, 30, 'F')
@@ -246,7 +262,7 @@ def parse_and_generate_pdf(html_content):
                 pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
             pdf.ln(5)
 
-    # 6. Notes
+    # --- 6. NOTES ---
     notes_div = soup.find(class_='market-notes')
     if notes_div:
         pdf.add_page()
@@ -263,7 +279,7 @@ def parse_and_generate_pdf(html_content):
 # --- 4. STREAMLIT INTERFACE ---
 st.set_page_config(page_title="BlueberryAI Formatter", layout="centered")
 st.title("📄 BlueberryAI PDF Generator")
-st.write("Upload your HTML report to generate the formatted PDF.")
+st.write("Upload your HTML report (Tabbed or Single Page) to generate the formatted PDF.")
 
 uploaded_file = st.file_uploader("Choose HTML file", type="html")
 
