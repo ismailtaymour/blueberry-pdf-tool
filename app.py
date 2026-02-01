@@ -133,6 +133,32 @@ class PDF(FPDF):
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(5)
 
+    def disclaimer_box(self, title, text):
+        self.check_page_break(35)
+        self.ln(5)
+        self.set_fill_color(255, 250, 240) # Light Yellow
+        self.set_draw_color(243, 156, 18)  # Orange Border
+        self.set_line_width(0.5)
+        
+        # Calculate height needed
+        self.set_font('Arial', '', 8)
+        # Approximate height calculation (number of lines * line height)
+        # 180 width / ~2 chars per mm = ~90 chars per line. 
+        # But for safety, let's just use multi_cell to draw.
+        
+        start_y = self.get_y()
+        self.rect(10, start_y, 190, 30, 'DF') # Draw background
+        
+        self.set_xy(15, start_y + 4)
+        self.set_font('Arial', 'B', 10)
+        self.set_text_color(160, 100, 0) # Dark Orange Text
+        self.cell(0, 5, clean_text(title), 0, 1)
+        
+        self.set_xy(15, start_y + 10)
+        self.set_font('Arial', '', 8)
+        self.multi_cell(180, 4, clean_text(text))
+        self.ln(5)
+
 # --- 3. UNIVERSAL HTML PARSER ---
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -185,18 +211,15 @@ def parse_and_generate_pdf(html_content):
                 pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
                 pdf.ln(2)
 
-    # --- 4. CARDS (BUY & SELL) - Universal Search ---
-    # Find ALL setup cards regardless of page structure (Tabs vs List)
+    # --- 4. CARDS (BUY & SELL) ---
     all_cards = soup.find_all(class_='setup-card')
     buys = []
     sells = []
 
     for card in all_cards:
-        # Detect type based on CSS class or content
         setup_type_el = card.find(class_='setup-type')
         is_sell = False
         
-        # Check for exit class or keywords
         if setup_type_el:
             classes = setup_type_el.get('class', [])
             text_type = safe_get_text(setup_type_el).lower()
@@ -214,7 +237,6 @@ def parse_and_generate_pdf(html_content):
             'mode': 'sell' if is_sell else 'buy'
         }
         
-        # Extract Table
         params = card.find(class_='trade-params')
         if params:
             for box in params.find_all(class_='param-box'):
@@ -222,19 +244,15 @@ def parse_and_generate_pdf(html_content):
                 val = safe_get_text(box.find(class_='param-value'))
                 if lbl: card_data['table'][lbl] = val
 
-        if is_sell:
-            sells.append(card_data)
-        else:
-            buys.append(card_data)
+        if is_sell: sells.append(card_data)
+        else: buys.append(card_data)
 
-    # Render Buys
     if buys:
         pdf.section_header("Top Buy Opportunities")
         for c in buys:
             pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], 
                              c['table'], c['rationale'], c['conf'], mode='buy')
 
-    # Render Sells
     if sells:
         pdf.section_header("Reduce/Exit Recommendations")
         for c in sells:
@@ -242,7 +260,6 @@ def parse_and_generate_pdf(html_content):
                              c['table'], c['rationale'], c['conf'], mode='sell')
 
     # --- 5. WATCHLIST ---
-    # Global search for watchlist items
     wl_items = soup.find_all(class_='watchlist-item')
     if wl_items:
         pdf.section_header("Watchlist - Additional Opportunities")
@@ -274,12 +291,25 @@ def parse_and_generate_pdf(html_content):
             pdf.multi_cell(0, 5, clean_text(safe_get_text(li)))
             pdf.ln(2)
 
+    # --- 7. DISCLAIMER (NEW ADDITION) ---
+    disclaimer = soup.find(class_='disclaimer')
+    if disclaimer:
+        pdf.ln(5)
+        title = safe_get_text(disclaimer.find('h4'))
+        # Get all paragraphs in the disclaimer
+        text_content = ""
+        for p in disclaimer.find_all('p'):
+            text_content += safe_get_text(p) + " "
+        
+        if not title: title = "Important Disclaimer"
+        pdf.disclaimer_box(title, text_content)
+
     return pdf
 
 # --- 4. STREAMLIT INTERFACE ---
 st.set_page_config(page_title="BlueberryAI Formatter", layout="centered")
 st.title("📄 BlueberryAI PDF Generator")
-st.write("Upload your HTML report (Tabbed or Single Page) to generate the formatted PDF.")
+st.write("Upload your HTML report to generate the formatted PDF.")
 
 uploaded_file = st.file_uploader("Choose HTML file", type="html")
 
