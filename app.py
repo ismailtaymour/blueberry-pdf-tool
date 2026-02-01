@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import tempfile
 import re
 
-# --- 1. TEXT CLEANING ---
+# --- 1. ROBUST TEXT SANITIZATION ---
 def clean_text(text):
     if not text: return ""
     replacements = {
@@ -19,7 +19,7 @@ def safe_get_text(element):
     if not element: return ""
     return element.get_text(" ", strip=True)
 
-# --- 2. PDF CLASS ---
+# --- 2. PDF ENGINE ---
 class PDF(FPDF):
     def header(self):
         self.set_fill_color(30, 60, 114)
@@ -147,216 +147,167 @@ class PDF(FPDF):
         self.multi_cell(180, 4, clean_text(text))
         self.ln(5)
 
-# --- 3. FINGERPRINT PARSER (The Key Logic) ---
-def find_container_by_keywords(soup, keywords, tag_type=None):
-    """Finds the smallest container holding all keywords."""
-    matches = []
-    # Search all divs or specific tags
-    tags = soup.find_all(tag_type) if tag_type else soup.find_all(['div', 'table', 'section'])
-    
-    for tag in tags:
-        text = safe_get_text(tag)
-        if all(k in text for k in keywords):
-            matches.append(tag)
-    
-    # Filter to find "leaf" containers (matches that don't contain other matches)
-    # This prevents selecting the entire <body> as a match
-    leaf_matches = []
-    for m in matches:
-        is_parent = False
-        for other in matches:
-            if m != other and m in other.parents:
-                is_parent = True # This 'other' is inside 'm', so 'm' is too big
-                break
-        # Logic inversion: we want the containers that ARE parents of text, but NOT parents of other containers
-        # Actually simplest way: Pick matches with shortest text length
-        leaf_matches.append(m)
-        
-    # Sort by length of text to find the most specific containers
-    leaf_matches.sort(key=lambda x: len(safe_get_text(x)))
-    
-    # Remove duplicates (nested containers often share text)
-    unique_matches = []
-    seen_text = set()
-    for m in leaf_matches:
-        t = safe_get_text(m)[:50] # Check first 50 chars signature
-        if t not in seen_text:
-            unique_matches.append(m)
-            seen_text.add(t)
-            
-    return unique_matches
-
+# --- 3. LINEAR PARSER (Preserves Order) ---
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     pdf = PDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # --- 1. ALERT BOX ---
-    # Fingerprint: "EXTREME" and "CAUTION"
-    alerts = find_container_by_keywords(soup, ["EXTREME", "CAUTION"])
-    if alerts:
-        a = alerts[0] # Take the most specific one
-        pdf.alert_box("EXTREME CAUTION REQUIRED", safe_get_text(a))
+    # 1. ALERT BOX
+    # Find any header with "CAUTION" and get its parent container
+    caution_header = soup.find(lambda t: t.name in ['h3','h4'] and 'CAUTION' in safe_get_text(t))
+    if caution_header:
+        alert_box = caution_header.find_parent(class_='alert-box') or caution_header.parent
+        title = safe_get_text(alert_box.find(['h3', 'h4', 'strong']))
+        text = safe_get_text(alert_box.find('p'))
+        pdf.alert_box(title, text)
 
-    # --- 2. INDEX STATUS ---
-    # Fingerprint: "Current Level" and "Distance"
-    indexes = find_container_by_keywords(soup, ["Current Level", "Distance"])
-    if indexes:
-        container = indexes[0]
+    # 2. INDEX STATUS
+    # Find "Current Level" text, then find the TABLE or GRID containing it
+    idx_anchor = soup.find(string=re.compile("Current Level"))
+    if idx_anchor:
+        # Go up until we find the card container
+        idx_card = idx_anchor.find_parent(class_='index-card') or idx_anchor.find_parent(class_='card') or idx_anchor.find_parent().find_parent()
+        
         pdf.section_header("Index Technical Status")
         pdf.set_font('Arial', '', 9)
         pdf.set_fill_color(250, 250, 250)
         
-        # Try to find rows (divs or trs) inside
-        rows = container.find_all(['div', 'tr'])
-        valid_rows = [r for r in rows if len(safe_get_text(r)) < 100 and ":" in safe_get_text(r)]
-        
-        # Dedup rows
-        seen = set()
-        clean_rows = []
-        for r in valid_rows:
-            if safe_get_text(r) not in seen:
-                clean_rows.append(r)
-                seen.add(safe_get_text(r))
-
-        for i in range(0, len(clean_rows), 2):
-            t1 = safe_get_text(clean_rows[i]).split(":", 1)
-            l1, v1 = (t1[0], t1[1]) if len(t1)>1 else (t1[0], "")
-            
+        rows = idx_card.find_all(class_='metric-row')
+        for i in range(0, len(rows), 2):
+            l1 = safe_get_text(rows[i].find(class_='metric-label'))
+            v1 = safe_get_text(rows[i].find(class_='metric-value'))
             pdf.cell(35, 7, clean_text(l1), 1, 0, 'L', fill=True)
             pdf.cell(60, 7, clean_text(v1), 1, 0, 'L')
             
-            if i + 1 < len(clean_rows):
-                t2 = safe_get_text(clean_rows[i+1]).split(":", 1)
-                l2, v2 = (t2[0], t2[1]) if len(t2)>1 else (t2[0], "")
+            if i + 1 < len(rows):
+                l2 = safe_get_text(rows[i+1].find(class_='metric-label'))
+                v2 = safe_get_text(rows[i+1].find(class_='metric-value'))
                 pdf.cell(35, 7, clean_text(l2), 1, 0, 'L', fill=True)
                 pdf.cell(60, 7, clean_text(v2), 1, 1, 'L')
             else:
                 pdf.ln()
 
-    # --- 3. MARKET ASSESSMENT ---
-    # Fingerprint: Header text
+    # 3. MARKET ASSESSMENT
     assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend Assessment' in safe_get_text(t))
     if assess_header:
         pdf.section_header("Market Trend Assessment")
-        # Grab text from the parent container of the header
-        parent = assess_header.parent
-        # Get paragraphs
-        for p in parent.find_all('p'):
-            if len(safe_get_text(p)) > 20: # Filter out empty trash
-                pdf.set_font('Arial', '', 9)
-                pdf.multi_cell(0, 5, clean_text(safe_get_text(p)))
-                pdf.ln(2)
+        # Get next div sibling which usually holds the content
+        content = assess_header.find_next_sibling('div')
+        if content:
+            for tag in content.find_all(['h3', 'p'], recursive=True):
+                if tag.name == 'h3':
+                    pdf.ln(3)
+                    pdf.set_font('Arial', 'B', 10)
+                    pdf.set_text_color(44, 62, 80)
+                    pdf.cell(0, 6, clean_text(safe_get_text(tag)), 0, 1)
+                else:
+                    pdf.set_font('Arial', '', 9)
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
+                    pdf.ln(2)
 
-    # --- 4. CARDS (BUY & SELL) ---
-    # Fingerprint: "Entry" AND "Target" AND "Stop"
-    # This identifies the Trade Params box. We go up to find the Card.
-    param_boxes = find_container_by_keywords(soup, ["Entry", "Target", "Stop"])
+    # 4. STOCKS (LINEAR TRAVERSAL)
+    # Find all 'ticker' elements. This preserves HTML order.
+    # Then climb up to find the card for each ticker.
+    tickers = soup.find_all(class_='ticker')
     
     buys = []
     sells = []
+    
+    for t_el in tickers:
+        # Find Parent Card
+        card = t_el.find_parent(class_='setup-card') or t_el.find_parent(class_='card') or t_el.find_parent().find_parent()
+        if not card: continue
 
-    for box in param_boxes:
-        # box is likely the params container. Go up to find the Card.
-        card = box.parent
-        # Validation: A card usually has a Ticker (uppercase, short)
-        # Scan for Ticker
-        text = safe_get_text(card)
-        if len(text) > 1000: continue # We grabbed too big a container
+        # Extract Data
+        ticker = safe_get_text(t_el)
+        name = safe_get_text(card.find(class_='company-name'))
         
-        # Determine Mode
+        setup_el = card.find(class_='setup-type')
+        setup = safe_get_text(setup_el)
+        
+        # Determine Mode (Buy/Sell)
         mode = 'buy'
-        if 'Exit' in text or 'Reduce' in text or 'Sell' in text:
-            mode = 'sell'
-            
-        # Extract Ticker (Naive regex: look for 3-5 uppercase letters at start of lines)
-        ticker_match = re.search(r'\b[A-Z]{3,5}\b', text)
-        ticker = ticker_match.group(0) if ticker_match else "STOCK"
+        if setup_el:
+            classes = setup_el.get('class', [])
+            if 'setup-type-exit' in classes or 'exit' in setup.lower() or 'reduce' in setup.lower():
+                mode = 'sell'
+                
+        # Details
+        details_div = card.find(class_='technical-details')
+        details = [safe_get_text(p) for p in details_div.find_all('p')] if details_div else []
         
-        # Extract Name (Line after ticker?)
-        name_match = re.search(r'\b[A-Z]{3,5}\b\s+([A-Za-z ]+)', text)
-        name = name_match.group(1) if name_match else "Company Name"
-        
-        # Extract Params
+        # Table
         table = {}
-        # Parse text for "Entry: 10.50" patterns
-        for key in ["Entry", "Target", "Stop", "Risk/Reward", "Current", "Action"]:
-             # Regex to find "Entry" followed by numbers/text until newline
-             m = re.search(f"{key}[:\s]+([0-9\.\- a-zA-Z]+)", text)
-             if m: table[key] = m.group(1).strip()
-
-        # Extract Rationale
-        rationale = ""
-        if "Rationale" in text:
-            rationale = text.split("Rationale")[-1].split("Confidence")[0].strip(": -")
-            
-        conf = ""
-        if "Confidence" in text:
-            conf = "Confidence" + text.split("Confidence")[-1].split("\n")[0]
-
-        card_data = {
-            'ticker': ticker, 'name': name, 'setup': mode.upper(),
-            'details': [], # Hard to parse unstructured details cleanly without classes
-            'table': table, 'rationale': rationale, 'conf': conf
-        }
-
-        if mode == 'sell': sells.append(card_data)
-        else: buys.append(card_data)
+        params_div = card.find(class_='trade-params')
+        if params_div:
+            for box in params_div.find_all(class_='param-box'):
+                lbl = safe_get_text(box.find(class_='param-label'))
+                val = safe_get_text(box.find(class_='param-value'))
+                if lbl: table[lbl] = val
+        
+        # Rationale & Confidence
+        rationale = safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip()
+        conf = safe_get_text(card.find(class_='confidence'))
+        
+        data = {'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode}
+        
+        if mode == 'sell': sells.append(data)
+        else: buys.append(data)
 
     if buys:
         pdf.section_header("Top Buy Opportunities")
         for c in buys:
-            pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], c['table'], c['rationale'], c['conf'], mode='buy')
-
+            pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], c['m'])
+            
     if sells:
         pdf.section_header("Reduce/Exit Recommendations")
         for c in sells:
-            pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], c['table'], c['rationale'], c['conf'], mode='sell')
+            pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], c['m'])
 
-    # --- 5. WATCHLIST ---
-    # Fingerprint: "Trigger" AND "Parameters"
-    wl_items = find_container_by_keywords(soup, ["Trigger", "Parameters"])
-    if wl_items:
-        pdf.section_header("Watchlist")
-        for item in wl_items:
-            t = safe_get_text(item)
-            if len(t) > 500: continue
-            
+    # 5. WATCHLIST
+    wl_section = soup.find(class_='watchlist')
+    if wl_section:
+        pdf.section_header("Watchlist - Additional Opportunities")
+        items = wl_section.find_all(class_='watchlist-item')
+        for item in items:
             pdf.check_page_break(35)
             pdf.set_fill_color(255, 248, 240)
             pdf.rect(10, pdf.get_y(), 190, 30, 'F')
             pdf.set_xy(15, pdf.get_y() + 5)
             
-            # Extract Title (First line)
-            lines = [l for l in t.split('\n') if l.strip()]
-            if lines:
-                pdf.set_font('Arial', 'B', 10)
-                pdf.cell(0, 5, clean_text(lines[0]), 0, 1)
-                pdf.set_font('Arial', '', 9)
-                for l in lines[1:]:
-                    pdf.cell(0, 5, clean_text(l), 0, 1)
-                pdf.ln(5)
+            h4 = safe_get_text(item.find('h4'))
+            pdf.set_font('Arial', 'B', 10)
+            pdf.cell(0, 5, clean_text(h4), 0, 1)
+            
+            ps = item.find_all('p')
+            pdf.set_font('Arial', '', 9)
+            for p in ps:
+                pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
+            pdf.ln(5)
 
-    # --- 6. NOTES ---
+    # 6. NOTES
     notes_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Technical Market Notes' in safe_get_text(t))
     if notes_header:
-        pdf.add_page()
-        pdf.section_header("Technical Market Notes")
-        # Try to find list items nearby
-        container = notes_header.parent
-        lis = container.find_all('li')
-        for li in lis:
-            pdf.cell(5, 5, chr(149), 0, 0)
-            pdf.multi_cell(0, 5, clean_text(safe_get_text(li)))
-            pdf.ln(2)
+        notes_div = notes_header.find_next_sibling('div') or soup.find(class_='market-notes')
+        if notes_div:
+            pdf.add_page()
+            pdf.section_header("Technical Market Notes")
+            for li in notes_div.find_all('li'):
+                pdf.cell(5, 5, chr(149), 0, 0)
+                pdf.multi_cell(0, 5, clean_text(safe_get_text(li)))
+                pdf.ln(2)
 
-    # --- 7. DISCLAIMER ---
-    # Fingerprint: "Disclaimer" and "Risk"
-    disc = find_container_by_keywords(soup, ["Disclaimer", "Risk"])
+    # 7. DISCLAIMER
+    disc = soup.find(class_='disclaimer')
     if disc:
-        d = disc[0] # Smallest match
-        pdf.disclaimer_box("Important Disclaimer", safe_get_text(d))
+        title = safe_get_text(disc.find('h4')) or "Important Disclaimer"
+        text = safe_get_text(disc)
+        # Remove title from text to avoid duplication
+        text = text.replace(title, "").strip()
+        pdf.disclaimer_box(title, text)
 
     return pdf
 
