@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import tempfile
 import re
 
-# --- 1. ROBUST TEXT SANITIZATION ---
+# --- 1. CLEANING ---
 def clean_text(text):
     if not text: return ""
     replacements = {
@@ -75,7 +75,6 @@ class PDF(FPDF):
 
     def content_card(self, ticker, name, setup_type, details, table_data, rationale, confidence, mode='buy'):
         self.check_page_break(80)
-        # Colors
         head_fill = (231, 76, 60) if mode == 'sell' else (52, 152, 219)
         badge_fill = (192, 57, 43) if mode == 'sell' else (46, 204, 113)
 
@@ -147,28 +146,31 @@ class PDF(FPDF):
         self.multi_cell(180, 4, clean_text(text))
         self.ln(5)
 
-# --- 3. LINEAR PARSER (Preserves Order) ---
+# --- 3. BOTTOM-UP PARSER ---
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     pdf = PDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # 1. ALERT BOX
-    # Find any header with "CAUTION" and get its parent container
-    caution_header = soup.find(lambda t: t.name in ['h3','h4'] and 'CAUTION' in safe_get_text(t))
-    if caution_header:
-        alert_box = caution_header.find_parent(class_='alert-box') or caution_header.parent
-        title = safe_get_text(alert_box.find(['h3', 'h4', 'strong']))
-        text = safe_get_text(alert_box.find('p'))
+    # 1. ALERT BOX (Heuristic)
+    alert = None
+    # Look for the specific text "EXTREME CAUTION" or the class
+    caution_txt = soup.find(string=re.compile("EXTREME CAUTION"))
+    if caution_txt:
+        # Walk up to find the container
+        alert = caution_txt.find_parent(class_='alert-box') or caution_txt.find_parent('div')
+
+    if alert:
+        title = safe_get_text(alert.find(['h3','h4','strong']))
+        text = safe_get_text(alert.find('p'))
         pdf.alert_box(title, text)
 
-    # 2. INDEX STATUS
-    # Find "Current Level" text, then find the TABLE or GRID containing it
-    idx_anchor = soup.find(string=re.compile("Current Level"))
-    if idx_anchor:
-        # Go up until we find the card container
-        idx_card = idx_anchor.find_parent(class_='index-card') or idx_anchor.find_parent(class_='card') or idx_anchor.find_parent().find_parent()
+    # 2. INDEX STATUS (Heuristic: "Current Level" text)
+    idx_label = soup.find(string=re.compile("Current Level"))
+    if idx_label:
+        # The container is usually a few levels up
+        idx_card = idx_label.find_parent(class_='index-card') or idx_label.find_parent('div').find_parent('div')
         
         pdf.section_header("Index Technical Status")
         pdf.set_font('Arial', '', 9)
@@ -189,14 +191,13 @@ def parse_and_generate_pdf(html_content):
             else:
                 pdf.ln()
 
-    # 3. MARKET ASSESSMENT
-    assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend Assessment' in safe_get_text(t))
+    # 3. MARKET ASSESSMENT (Heuristic: Header)
+    assess_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Market Trend Assessment' in safe_get_text(t))
     if assess_header:
         pdf.section_header("Market Trend Assessment")
-        # Get next div sibling which usually holds the content
-        content = assess_header.find_next_sibling('div')
+        content = assess_header.find_next_sibling('div') or assess_header.parent.find(class_='market-assessment')
         if content:
-            for tag in content.find_all(['h3', 'p'], recursive=True):
+            for tag in content.find_all(['h3', 'p']):
                 if tag.name == 'h3':
                     pdf.ln(3)
                     pdf.set_font('Arial', 'B', 10)
@@ -208,52 +209,69 @@ def parse_and_generate_pdf(html_content):
                     pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
                     pdf.ln(2)
 
-    # 4. STOCKS (LINEAR TRAVERSAL)
-    # Find all 'ticker' elements. This preserves HTML order.
-    # Then climb up to find the card for each ticker.
-    tickers = soup.find_all(class_='ticker')
+    # 4. CARDS (The Fix: Find Params -> Find Parent -> Find Ticker)
+    # This works even if Ticker and Params are separated by Tabs structure
+    
+    # Find all "Entry Range" labels. These are anchors for every card.
+    entry_labels = soup.find_all(string=re.compile("Entry Range"))
     
     buys = []
     sells = []
-    
-    for t_el in tickers:
-        # Find Parent Card
-        card = t_el.find_parent(class_='setup-card') or t_el.find_parent(class_='card') or t_el.find_parent().find_parent()
-        if not card: continue
+    seen_tickers = set()
 
-        # Extract Data
-        ticker = safe_get_text(t_el)
-        name = safe_get_text(card.find(class_='company-name'))
+    for label in entry_labels:
+        # 1. Find the Params Container
+        params_div = label.find_parent(class_='trade-params') or label.find_parent('div').find_parent('div')
+        if not params_div: continue
         
+        # 2. Find the Card Container (Climb up until we find a Ticker or Company Name)
+        card = params_div
+        ticker_el = None
+        
+        # Climb up max 6 levels to find a common ancestor with the ticker
+        for _ in range(6):
+            if not card.parent: break
+            card = card.parent
+            # Check if this parent contains a ticker class
+            ticker_el = card.find(class_='ticker')
+            if ticker_el: break
+            
+        if not ticker_el: continue # Orphaned table, skip
+        
+        ticker_text = safe_get_text(ticker_el)
+        if ticker_text in seen_tickers: continue
+        seen_tickers.add(ticker_text)
+
+        # 3. Now we have the Card and the Ticker. Extract everything.
+        name = safe_get_text(card.find(class_='company-name'))
         setup_el = card.find(class_='setup-type')
         setup = safe_get_text(setup_el)
         
-        # Determine Mode (Buy/Sell)
         mode = 'buy'
         if setup_el:
             classes = setup_el.get('class', [])
-            if 'setup-type-exit' in classes or 'exit' in setup.lower() or 'reduce' in setup.lower():
+            if 'exit' in setup.lower() or 'reduce' in setup.lower() or 'sell' in setup.lower() or 'setup-type-exit' in classes:
                 mode = 'sell'
                 
         # Details
         details_div = card.find(class_='technical-details')
         details = [safe_get_text(p) for p in details_div.find_all('p')] if details_div else []
         
-        # Table
+        # Table (Use the params_div we found at start)
         table = {}
-        params_div = card.find(class_='trade-params')
-        if params_div:
-            for box in params_div.find_all(class_='param-box'):
-                lbl = safe_get_text(box.find(class_='param-label'))
-                val = safe_get_text(box.find(class_='param-value'))
-                if lbl: table[lbl] = val
-        
+        for box in params_div.find_all(class_='param-box'):
+            lbl = safe_get_text(box.find(class_='param-label'))
+            val = safe_get_text(box.find(class_='param-value'))
+            if lbl: table[lbl] = val
+
         # Rationale & Confidence
-        rationale = safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip()
-        conf = safe_get_text(card.find(class_='confidence'))
+        rationale_div = card.find(class_='rationale')
+        rationale = safe_get_text(rationale_div).replace("Rationale:", "").strip() if rationale_div else ""
         
-        data = {'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode}
-        
+        conf_div = card.find(class_='confidence')
+        conf = safe_get_text(conf_div) if conf_div else ""
+
+        data = {'t': ticker_text, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode}
         if mode == 'sell': sells.append(data)
         else: buys.append(data)
 
@@ -268,11 +286,10 @@ def parse_and_generate_pdf(html_content):
             pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], c['m'])
 
     # 5. WATCHLIST
-    wl_section = soup.find(class_='watchlist')
-    if wl_section:
+    wl_items = soup.find_all(class_='watchlist-item')
+    if wl_items:
         pdf.section_header("Watchlist - Additional Opportunities")
-        items = wl_section.find_all(class_='watchlist-item')
-        for item in items:
+        for item in wl_items:
             pdf.check_page_break(35)
             pdf.set_fill_color(255, 248, 240)
             pdf.rect(10, pdf.get_y(), 190, 30, 'F')
@@ -304,14 +321,12 @@ def parse_and_generate_pdf(html_content):
     disc = soup.find(class_='disclaimer')
     if disc:
         title = safe_get_text(disc.find('h4')) or "Important Disclaimer"
-        text = safe_get_text(disc)
-        # Remove title from text to avoid duplication
-        text = text.replace(title, "").strip()
+        text = safe_get_text(disc).replace(title, "").strip()
         pdf.disclaimer_box(title, text)
 
     return pdf
 
-# --- 4. STREAMLIT INTERFACE ---
+# --- 4. STREAMLIT ---
 st.set_page_config(page_title="BlueberryAI Formatter", layout="centered")
 st.title("📄 BlueberryAI PDF Generator")
 st.write("Upload your HTML report to generate the formatted PDF.")
