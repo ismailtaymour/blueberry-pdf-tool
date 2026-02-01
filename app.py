@@ -6,12 +6,14 @@ import tempfile
 # --- 1. ROBUST TEXT SANITIZATION ---
 def clean_text(text):
     if not text: return ""
+    # Standardize quotes and dashes
     replacements = {
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' '
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
+    # Force encode to Latin-1 compatible (strips emojis/weird chars that crash PDF)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
 def safe_get_text(element, default=""):
@@ -137,21 +139,15 @@ class PDF(FPDF):
         self.check_page_break(35)
         self.ln(5)
         self.set_fill_color(255, 250, 240) # Light Yellow
-        self.set_draw_color(243, 156, 18)  # Orange Border
+        self.set_draw_color(243, 156, 18)
         self.set_line_width(0.5)
         
-        # Calculate height needed
-        self.set_font('Arial', '', 8)
-        # Approximate height calculation (number of lines * line height)
-        # 180 width / ~2 chars per mm = ~90 chars per line. 
-        # But for safety, let's just use multi_cell to draw.
-        
         start_y = self.get_y()
-        self.rect(10, start_y, 190, 30, 'DF') # Draw background
+        self.rect(10, start_y, 190, 30, 'DF')
         
         self.set_xy(15, start_y + 4)
         self.set_font('Arial', 'B', 10)
-        self.set_text_color(160, 100, 0) # Dark Orange Text
+        self.set_text_color(160, 100, 0)
         self.cell(0, 5, clean_text(title), 0, 1)
         
         self.set_xy(15, start_y + 10)
@@ -159,23 +155,37 @@ class PDF(FPDF):
         self.multi_cell(180, 4, clean_text(text))
         self.ln(5)
 
-# --- 3. UNIVERSAL HTML PARSER ---
+# --- 3. ROBUST HTML PARSER (HEURISTIC MODE) ---
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     pdf = PDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # --- 1. ALERT BOX ---
+    # --- 1. ALERT BOX (Heuristic Search) ---
+    # Find any div that has 'alert-box' class OR contains "EXTREME CAUTION"
     alert = soup.find(class_='alert-box')
+    if not alert:
+        # Fallback: Find h3 with caution text and get its parent
+        caution_header = soup.find(lambda tag: tag.name == 'h3' and 'CAUTION' in tag.get_text())
+        if caution_header:
+            alert = caution_header.parent
+
     if alert:
         title = safe_get_text(alert.find('h3'))
         text = safe_get_text(alert.find('p'))
         if title or text:
             pdf.alert_box(title, text)
 
-    # --- 2. INDEX STATUS ---
+    # --- 2. INDEX STATUS (Heuristic Search) ---
     index_card = soup.find(class_='index-card')
+    if not index_card:
+        # Fallback: Find label "Current Level" and get the container
+        lbl = soup.find(class_='metric-label', string=lambda t: t and 'Current Level' in t)
+        if lbl:
+             # Go up 3 levels (row -> container -> card) approx
+             index_card = lbl.find_parent(class_=lambda x: x and 'card' in x if x else False)
+
     if index_card:
         pdf.section_header("Index Technical Status")
         rows = index_card.find_all(class_='metric-row')
@@ -211,25 +221,43 @@ def parse_and_generate_pdf(html_content):
                 pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
                 pdf.ln(2)
 
-    # --- 4. CARDS (BUY & SELL) ---
-    all_cards = soup.find_all(class_='setup-card')
+    # --- 4. CARDS (BUY & SELL) - Ticker-Based Discovery ---
+    # Primary Search: class="setup-card"
+    cards = soup.find_all(class_='setup-card')
+    
+    # Fallback: If no cards found via class, look for all 'ticker' elements
+    if not cards:
+        tickers = soup.find_all(class_='ticker')
+        # Get the unique parents of these tickers (assuming parent is the card)
+        cards = list(set([t.find_parent('div').find_parent('div') for t in tickers if t.find_parent('div')]))
+        # Filter out Nones
+        cards = [c for c in cards if c]
+
     buys = []
     sells = []
 
-    for card in all_cards:
+    for card in cards:
         setup_type_el = card.find(class_='setup-type')
         is_sell = False
+        setup_text = ""
         
         if setup_type_el:
+            setup_text = safe_get_text(setup_type_el)
             classes = setup_type_el.get('class', [])
-            text_type = safe_get_text(setup_type_el).lower()
-            if 'setup-type-exit' in classes or 'exit' in text_type or 'reduce' in text_type:
+            text_lower = setup_text.lower()
+            if 'setup-type-exit' in classes or 'exit' in text_lower or 'reduce' in text_lower:
                 is_sell = True
         
+        # Safe extractions
+        ticker_el = card.find(class_='ticker')
+        name_el = card.find(class_='company-name')
+        
+        if not ticker_el: continue # Skip if malformed
+
         card_data = {
-            'ticker': safe_get_text(card.find(class_='ticker')),
-            'name': safe_get_text(card.find(class_='company-name')),
-            'setup': safe_get_text(card.find(class_='setup-type')),
+            'ticker': safe_get_text(ticker_el),
+            'name': safe_get_text(name_el),
+            'setup': setup_text,
             'details': [safe_get_text(p) for p in card.find(class_='technical-details').find_all('p')] if card.find(class_='technical-details') else [],
             'table': {},
             'rationale': safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip(),
@@ -290,18 +318,19 @@ def parse_and_generate_pdf(html_content):
             pdf.cell(5, 5, chr(149), 0, 0)
             pdf.multi_cell(0, 5, clean_text(safe_get_text(li)))
             pdf.ln(2)
-
-    # --- 7. DISCLAIMER (NEW ADDITION) ---
+            
+    # --- 7. DISCLAIMER ---
     disclaimer = soup.find(class_='disclaimer')
     if disclaimer:
         pdf.ln(5)
         title = safe_get_text(disclaimer.find('h4'))
-        # Get all paragraphs in the disclaimer
+        if not title: title = "Important Disclaimer"
+        
+        # Get all paragraph text
         text_content = ""
         for p in disclaimer.find_all('p'):
             text_content += safe_get_text(p) + " "
-        
-        if not title: title = "Important Disclaimer"
+            
         pdf.disclaimer_box(title, text_content)
 
     return pdf
@@ -317,7 +346,16 @@ if uploaded_file is not None:
     if st.button("Generate PDF"):
         with st.spinner("Parsing and Formatting..."):
             try:
-                html_content = uploaded_file.getvalue().decode("utf-8")
+                # Try multiple decodings to handle file variations
+                bytes_data = uploaded_file.getvalue()
+                try:
+                    html_content = bytes_data.decode("utf-8")
+                except UnicodeDecodeError:
+                    try:
+                        html_content = bytes_data.decode("latin-1")
+                    except:
+                        html_content = bytes_data.decode("cp1252", errors="ignore")
+                
                 pdf = parse_and_generate_pdf(html_content)
                 
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
