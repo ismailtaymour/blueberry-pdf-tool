@@ -2,18 +2,17 @@ import streamlit as st
 from fpdf import FPDF
 from bs4 import BeautifulSoup
 import tempfile
+import re
 
 # --- 1. ROBUST TEXT SANITIZATION ---
 def clean_text(text):
     if not text: return ""
-    # Standardize quotes and dashes
     replacements = {
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' '
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-    # Force encode to Latin-1 compatible (strips emojis/weird chars that crash PDF)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
 def safe_get_text(element, default=""):
@@ -141,7 +140,6 @@ class PDF(FPDF):
         self.set_fill_color(255, 250, 240) # Light Yellow
         self.set_draw_color(243, 156, 18)
         self.set_line_width(0.5)
-        
         start_y = self.get_y()
         self.rect(10, start_y, 190, 30, 'DF')
         
@@ -155,114 +153,118 @@ class PDF(FPDF):
         self.multi_cell(180, 4, clean_text(text))
         self.ln(5)
 
-# --- 3. ROBUST HTML PARSER (HEURISTIC MODE) ---
+# --- 3. ANCHOR-BASED PARSER ---
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     pdf = PDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # --- 1. ALERT BOX (Heuristic Search) ---
-    # Find any div that has 'alert-box' class OR contains "EXTREME CAUTION"
+    # --- 1. ALERT BOX ---
+    # Look for "EXTREME CAUTION" or generic alert class
     alert = soup.find(class_='alert-box')
     if not alert:
-        # Fallback: Find h3 with caution text and get its parent
-        caution_header = soup.find(lambda tag: tag.name == 'h3' and 'CAUTION' in tag.get_text())
-        if caution_header:
-            alert = caution_header.parent
+        caution_header = soup.find(lambda t: t.name in ['h3','h4'] and 'CAUTION' in t.get_text())
+        if caution_header: alert = caution_header.parent
 
     if alert:
-        title = safe_get_text(alert.find('h3'))
+        title = safe_get_text(alert.find(['h3', 'h4', 'strong']))
         text = safe_get_text(alert.find('p'))
-        if title or text:
-            pdf.alert_box(title, text)
+        if title: pdf.alert_box(title, text)
 
-    # --- 2. INDEX STATUS (Heuristic Search) ---
-    index_card = soup.find(class_='index-card')
-    if not index_card:
-        # Fallback: Find label "Current Level" and get the container
-        lbl = soup.find(class_='metric-label', string=lambda t: t and 'Current Level' in t)
-        if lbl:
-             # Go up 3 levels (row -> container -> card) approx
-             index_card = lbl.find_parent(class_=lambda x: x and 'card' in x if x else False)
+    # --- 2. INDEX STATUS (Anchor: "Current Level") ---
+    # Find the text "Current Level" anywhere, then find its container
+    index_anchor = soup.find(string=re.compile("Current Level"))
+    index_rows = []
+    
+    if index_anchor:
+        # Walk up to find the container of rows
+        container = index_anchor.find_parent(class_=lambda x: x and ('index' in x or 'card' in x) if x else True)
+        # If we found a container, get all rows inside it
+        if container:
+            index_rows = container.find_all(class_='metric-row')
 
-    if index_card:
+    if index_rows:
         pdf.section_header("Index Technical Status")
-        rows = index_card.find_all(class_='metric-row')
         pdf.set_font('Arial', '', 9)
         pdf.set_fill_color(250, 250, 250)
-        for i in range(0, len(rows), 2):
-            label1 = safe_get_text(rows[i].find(class_='metric-label'))
-            val1 = safe_get_text(rows[i].find(class_='metric-value'))
-            pdf.cell(35, 7, clean_text(label1), 1, 0, 'L', fill=True)
-            pdf.cell(60, 7, clean_text(val1), 1, 0, 'L')
+        for i in range(0, len(index_rows), 2):
+            r1 = index_rows[i]
+            l1 = safe_get_text(r1.find(class_='metric-label'))
+            v1 = safe_get_text(r1.find(class_='metric-value'))
+            pdf.cell(35, 7, clean_text(l1), 1, 0, 'L', fill=True)
+            pdf.cell(60, 7, clean_text(v1), 1, 0, 'L')
             
-            if i + 1 < len(rows):
-                label2 = safe_get_text(rows[i+1].find(class_='metric-label'))
-                val2 = safe_get_text(rows[i+1].find(class_='metric-value'))
-                pdf.cell(35, 7, clean_text(label2), 1, 0, 'L', fill=True)
-                pdf.cell(60, 7, clean_text(val2), 1, 1, 'L')
+            if i + 1 < len(index_rows):
+                r2 = index_rows[i+1]
+                l2 = safe_get_text(r2.find(class_='metric-label'))
+                v2 = safe_get_text(r2.find(class_='metric-value'))
+                pdf.cell(35, 7, clean_text(l2), 1, 0, 'L', fill=True)
+                pdf.cell(60, 7, clean_text(v2), 1, 1, 'L')
             else:
                 pdf.ln()
 
-    # --- 3. MARKET ASSESSMENT ---
-    assess = soup.find(class_='market-assessment')
-    if assess:
+    # --- 3. MARKET ASSESSMENT (Anchor: Header Text) ---
+    assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend Assessment' in t.get_text())
+    if assess_header:
         pdf.section_header("Market Trend Assessment")
-        for tag in assess.find_all(['h3', 'p']):
-            if tag.name == 'h3':
-                pdf.ln(3)
-                pdf.set_font('Arial', 'B', 10)
-                pdf.set_text_color(44, 62, 80)
-                pdf.cell(0, 6, clean_text(safe_get_text(tag)), 0, 1)
-            else:
-                pdf.set_font('Arial', '', 9)
-                pdf.set_text_color(0, 0, 0)
-                pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
-                pdf.ln(2)
+        # Find next sibling container (often a div)
+        content_div = assess_header.find_next_sibling('div')
+        if content_div:
+            for tag in content_div.find_all(['h3', 'p']):
+                if tag.name == 'h3':
+                    pdf.ln(3)
+                    pdf.set_font('Arial', 'B', 10)
+                    pdf.set_text_color(44, 62, 80)
+                    pdf.cell(0, 6, clean_text(safe_get_text(tag)), 0, 1)
+                else:
+                    pdf.set_font('Arial', '', 9)
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
+                    pdf.ln(2)
 
-    # --- 4. CARDS (BUY & SELL) - Ticker-Based Discovery ---
-    # Primary Search: class="setup-card"
-    cards = soup.find_all(class_='setup-card')
+    # --- 4. CARDS (Anchor: "Entry Range") ---
+    # Every valid card has a table with "Entry Range". Use this to find cards.
+    entry_anchors = soup.find_all(string=re.compile("Entry Range"))
     
-    # Fallback: If no cards found via class, look for all 'ticker' elements
-    if not cards:
-        tickers = soup.find_all(class_='ticker')
-        # Get the unique parents of these tickers (assuming parent is the card)
-        cards = list(set([t.find_parent('div').find_parent('div') for t in tickers if t.find_parent('div')]))
-        # Filter out Nones
-        cards = [c for c in cards if c]
-
     buys = []
     sells = []
+    processed_cards = [] # Avoid duplicates
 
-    for card in cards:
+    for anchor in entry_anchors:
+        # Walk up 3-4 levels to find the 'card' container
+        # Usually: text -> div(box) -> div(params) -> div(card)
+        card = anchor.find_parent(class_=lambda x: x and 'card' in x if x else False)
+        
+        # If class 'card' is missing, just go up 3 levels
+        if not card:
+            try:
+                card = anchor.find_parent().find_parent().find_parent()
+            except: continue
+
+        if card in processed_cards or not card: continue
+        processed_cards.append(card)
+
+        # Extract Data
+        ticker_el = card.find(class_='ticker')
+        if not ticker_el: continue # Not a valid card
+
         setup_type_el = card.find(class_='setup-type')
         is_sell = False
         setup_text = ""
-        
         if setup_type_el:
             setup_text = safe_get_text(setup_type_el)
-            classes = setup_type_el.get('class', [])
-            text_lower = setup_text.lower()
-            if 'setup-type-exit' in classes or 'exit' in text_lower or 'reduce' in text_lower:
+            if 'exit' in setup_text.lower() or 'reduce' in setup_text.lower() or 'sell' in setup_text.lower():
                 is_sell = True
-        
-        # Safe extractions
-        ticker_el = card.find(class_='ticker')
-        name_el = card.find(class_='company-name')
-        
-        if not ticker_el: continue # Skip if malformed
 
         card_data = {
             'ticker': safe_get_text(ticker_el),
-            'name': safe_get_text(name_el),
+            'name': safe_get_text(card.find(class_='company-name')),
             'setup': setup_text,
             'details': [safe_get_text(p) for p in card.find(class_='technical-details').find_all('p')] if card.find(class_='technical-details') else [],
             'table': {},
             'rationale': safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip(),
             'conf': safe_get_text(card.find(class_='confidence')),
-            'mode': 'sell' if is_sell else 'buy'
         }
         
         params = card.find(class_='trade-params')
@@ -278,16 +280,14 @@ def parse_and_generate_pdf(html_content):
     if buys:
         pdf.section_header("Top Buy Opportunities")
         for c in buys:
-            pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], 
-                             c['table'], c['rationale'], c['conf'], mode='buy')
+            pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], c['table'], c['rationale'], c['conf'], mode='buy')
 
     if sells:
         pdf.section_header("Reduce/Exit Recommendations")
         for c in sells:
-            pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], 
-                             c['table'], c['rationale'], c['conf'], mode='sell')
+            pdf.content_card(c['ticker'], c['name'], c['setup'], c['details'], c['table'], c['rationale'], c['conf'], mode='sell')
 
-    # --- 5. WATCHLIST ---
+    # --- 5. WATCHLIST (Anchor: Class 'watchlist-item') ---
     wl_items = soup.find_all(class_='watchlist-item')
     if wl_items:
         pdf.section_header("Watchlist - Additional Opportunities")
@@ -307,30 +307,26 @@ def parse_and_generate_pdf(html_content):
                 pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
             pdf.ln(5)
 
-    # --- 6. NOTES ---
-    notes_div = soup.find(class_='market-notes')
-    if notes_div:
-        pdf.add_page()
-        pdf.section_header("Technical Market Notes")
-        lis = notes_div.find_all('li')
-        pdf.set_font('Arial', '', 9)
-        for li in lis:
-            pdf.cell(5, 5, chr(149), 0, 0)
-            pdf.multi_cell(0, 5, clean_text(safe_get_text(li)))
-            pdf.ln(2)
-            
-    # --- 7. DISCLAIMER ---
+    # --- 6. NOTES (Anchor: "Technical Market Notes") ---
+    notes_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Technical Market Notes' in t.get_text())
+    if notes_header:
+        notes_div = notes_header.find_next_sibling('div') # Try sibling
+        if not notes_div: notes_div = soup.find(class_='market-notes') # Fallback to class
+        
+        if notes_div:
+            pdf.add_page()
+            pdf.section_header("Technical Market Notes")
+            for li in notes_div.find_all('li'):
+                pdf.cell(5, 5, chr(149), 0, 0)
+                pdf.multi_cell(0, 5, clean_text(safe_get_text(li)))
+                pdf.ln(2)
+
+    # --- 7. DISCLAIMER (Anchor: Class 'disclaimer') ---
     disclaimer = soup.find(class_='disclaimer')
     if disclaimer:
         pdf.ln(5)
-        title = safe_get_text(disclaimer.find('h4'))
-        if not title: title = "Important Disclaimer"
-        
-        # Get all paragraph text
-        text_content = ""
-        for p in disclaimer.find_all('p'):
-            text_content += safe_get_text(p) + " "
-            
+        title = safe_get_text(disclaimer.find('h4')) or "Important Disclaimer"
+        text_content = " ".join([safe_get_text(p) for p in disclaimer.find_all('p')])
         pdf.disclaimer_box(title, text_content)
 
     return pdf
@@ -346,15 +342,12 @@ if uploaded_file is not None:
     if st.button("Generate PDF"):
         with st.spinner("Parsing and Formatting..."):
             try:
-                # Try multiple decodings to handle file variations
+                # Robust decoding
                 bytes_data = uploaded_file.getvalue()
                 try:
                     html_content = bytes_data.decode("utf-8")
-                except UnicodeDecodeError:
-                    try:
-                        html_content = bytes_data.decode("latin-1")
-                    except:
-                        html_content = bytes_data.decode("cp1252", errors="ignore")
+                except:
+                    html_content = bytes_data.decode("latin-1", errors="ignore")
                 
                 pdf = parse_and_generate_pdf(html_content)
                 
