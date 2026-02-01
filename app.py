@@ -3,26 +3,22 @@ from fpdf import FPDF
 from bs4 import BeautifulSoup
 import tempfile
 
-# --- 1. SANITIZATION FUNCTION (The Fix for 'latin-1' Errors) ---
+# --- 1. SANITIZATION HELPER ---
 def clean_text(text):
     if not text: return ""
-    # Replace "smart" quotes and dashes with standard versions
     replacements = {
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
-        '\u2013': '-', '\u2014': '-', '\u2026': '...',
-        '\u00A0': ' '  # Non-breaking space
+        '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' '
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-    
-    # Strip emojis and other non-latin characters that crash the PDF engine
-    # This encodes to ASCII/Latin-1 and ignores errors (dropping bad chars), then decodes back
+    # Strip non-latin characters to prevent PDF crashes
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
 # --- 2. PDF GENERATION ENGINE ---
 class PDF(FPDF):
     def header(self):
-        self.set_fill_color(30, 60, 114) # Deep Blue
+        self.set_fill_color(30, 60, 114)
         self.rect(0, 0, 210, 45, 'F')
         self.set_font('Arial', 'B', 22)
         self.set_text_color(255, 255, 255)
@@ -64,12 +60,10 @@ class PDF(FPDF):
         self.set_line_width(0.5)
         start_y = self.get_y()
         self.rect(10, start_y, 190, 35, 'DF')
-        
         self.set_xy(15, start_y + 5)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(192, 57, 43)
         self.cell(0, 5, clean_text(title), 0, 1)
-        
         self.set_xy(15, start_y + 12)
         self.set_font('Arial', '', 10)
         self.set_text_color(60, 0, 0)
@@ -84,30 +78,25 @@ class PDF(FPDF):
         else:
             head_fill, badge_fill = (231, 76, 60), (192, 57, 43)
 
-        # Header
         self.set_fill_color(*head_fill)
         self.set_text_color(255, 255, 255)
         self.set_font('Arial', 'B', 12)
         self.cell(25, 8, f" {clean_text(ticker)}", 0, 0, 'L', fill=True)
-        
         self.set_text_color(80, 80, 80)
         self.set_font('Arial', '', 10)
         self.cell(100, 8, f"  {clean_text(name)}", 0, 0, 'L')
-        
         self.set_fill_color(*badge_fill)
         self.set_text_color(255, 255, 255)
         self.set_font('Arial', 'B', 8)
         self.cell(65, 8, clean_text(setup_type), 0, 1, 'C', fill=True)
         self.ln(2)
 
-        # Details
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', '', 9)
         for line in details:
             self.multi_cell(0, 5, clean_text(line))
             self.ln(1)
 
-        # Table
         if table_data:
             self.ln(2)
             self.set_font('Arial', 'B', 8)
@@ -122,7 +111,6 @@ class PDF(FPDF):
                 self.cell(col_width, 8, clean_text(str(val)), 1, 0, 'C')
             self.ln(10)
 
-        # Rationale
         if rationale:
             self.set_fill_color(245, 248, 250)
             self.rect(10, self.get_y(), 190, 15, 'F')
@@ -130,7 +118,6 @@ class PDF(FPDF):
             self.set_font('Arial', 'I', 9)
             self.multi_cell(186, 5, f"Rationale: {clean_text(rationale)}")
         
-        # Confidence
         if confidence:
             self.ln(2)
             self.set_font('Arial', 'B', 9)
@@ -138,12 +125,17 @@ class PDF(FPDF):
             elif "MEDIUM" in confidence: self.set_text_color(243, 156, 18)
             else: self.set_text_color(192, 57, 43)
             self.cell(0, 5, clean_text(confidence), 0, 1, 'R')
-        
         self.ln(5)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(5)
 
-# --- 3. HTML PARSER (Now uses clean_text) ---
+# --- 3. ROBUST HTML PARSER (SAFE VERSION) ---
+def safe_get_text(element, default=""):
+    """Safely extracts text from an element, returning default if missing."""
+    if element and hasattr(element, 'get_text'):
+        return element.get_text(strip=True)
+    return default
+
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     pdf = PDF()
@@ -153,57 +145,56 @@ def parse_and_generate_pdf(html_content):
     # 1. Alert Box
     alert = soup.find(class_='alert-box')
     if alert:
-        title = alert.find('h3').get_text(strip=True)
-        text = alert.find('p').get_text(strip=True)
-        pdf.alert_box(title, text)
+        title = safe_get_text(alert.find('h3'))
+        text = safe_get_text(alert.find('p'))
+        if title or text:
+            pdf.alert_box(title, text)
 
     # 2. Index Status
-    pdf.section_header("Index Technical Status")
     index_card = soup.find(class_='index-card')
     if index_card:
+        pdf.section_header("Index Technical Status")
         rows = index_card.find_all(class_='metric-row')
         pdf.set_font('Arial', '', 9)
         pdf.set_fill_color(250, 250, 250)
-        # Process in pairs for 2-column layout
         for i in range(0, len(rows), 2):
-            label1 = rows[i].find(class_='metric-label').get_text(strip=True)
-            val1 = rows[i].find(class_='metric-value').get_text(strip=True)
+            label1 = safe_get_text(rows[i].find(class_='metric-label'))
+            val1 = safe_get_text(rows[i].find(class_='metric-value'))
             pdf.cell(35, 7, clean_text(label1), 1, 0, 'L', fill=True)
             pdf.cell(60, 7, clean_text(val1), 1, 0, 'L')
             
             if i + 1 < len(rows):
-                label2 = rows[i+1].find(class_='metric-label').get_text(strip=True)
-                val2 = rows[i+1].find(class_='metric-value').get_text(strip=True)
+                label2 = safe_get_text(rows[i+1].find(class_='metric-label'))
+                val2 = safe_get_text(rows[i+1].find(class_='metric-value'))
                 pdf.cell(35, 7, clean_text(label2), 1, 0, 'L', fill=True)
                 pdf.cell(60, 7, clean_text(val2), 1, 1, 'L')
             else:
                 pdf.ln()
 
     # 3. Market Assessment
-    pdf.section_header("Market Trend Assessment")
     assess = soup.find(class_='market-assessment')
     if assess:
+        pdf.section_header("Market Trend Assessment")
         for tag in assess.find_all(['h3', 'p']):
             if tag.name == 'h3':
                 pdf.ln(3)
                 pdf.set_font('Arial', 'B', 10)
                 pdf.set_text_color(44, 62, 80)
-                pdf.cell(0, 6, clean_text(tag.get_text(strip=True)), 0, 1)
+                pdf.cell(0, 6, clean_text(safe_get_text(tag)), 0, 1)
             else:
                 pdf.set_font('Arial', '', 9)
                 pdf.set_text_color(0, 0, 0)
-                pdf.multi_cell(0, 5, clean_text(tag.get_text(strip=True)))
+                pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
                 pdf.ln(2)
 
     # 4. Process Cards (Buy/Sell)
     sections = soup.find_all(class_='section')
     for section in sections:
-        title = section.find(class_='section-title')
-        if not title: continue
-        title_text = title.get_text(strip=True)
+        title_el = section.find(class_='section-title')
+        if not title_el: continue
+        title_text = safe_get_text(title_el)
         
-        # Skip sections we already handled
-        if "Index" in title_text or "Assessment" in title_text or "Watchlist" in title_text or "Notes" in title_text:
+        if any(x in title_text for x in ["Index", "Assessment", "Watchlist", "Notes"]):
             continue
             
         pdf.section_header(title_text)
@@ -211,34 +202,33 @@ def parse_and_generate_pdf(html_content):
         
         cards = section.find_all(class_='setup-card')
         for card in cards:
-            ticker = card.find(class_='ticker').get_text(strip=True)
-            name = card.find(class_='company-name').get_text(strip=True)
-            setup = card.find(class_='setup-type').get_text(strip=True)
+            ticker = safe_get_text(card.find(class_='ticker'))
+            name = safe_get_text(card.find(class_='company-name'))
+            setup = safe_get_text(card.find(class_='setup-type'))
             
             details_div = card.find(class_='technical-details')
-            details = [p.get_text(strip=True) for p in details_div.find_all('p')] if details_div else []
+            details = [safe_get_text(p) for p in details_div.find_all('p')] if details_div else []
             
             table_data = {}
             params = card.find(class_='trade-params')
             if params:
                 boxes = params.find_all(class_='param-box')
                 for box in boxes:
-                    lbl = box.find(class_='param-label').get_text(strip=True)
-                    val = box.find(class_='param-value').get_text(strip=True)
-                    table_data[lbl] = val
+                    lbl = safe_get_text(box.find(class_='param-label'))
+                    val = safe_get_text(box.find(class_='param-value'))
+                    if lbl: table_data[lbl] = val
             
             rationale_div = card.find(class_='rationale')
-            rationale = rationale_div.get_text(strip=True).replace("Rationale:", "").strip() if rationale_div else ""
+            rationale = safe_get_text(rationale_div).replace("Rationale:", "").strip() if rationale_div else ""
             
-            conf_span = card.find(class_='confidence')
-            conf = conf_span.get_text(strip=True) if conf_span else ""
+            conf = safe_get_text(card.find(class_='confidence'))
             
             pdf.content_card(ticker, name, setup, details, table_data, rationale, conf, mode)
 
     # 5. Watchlist
-    pdf.section_header("Watchlist - Additional Opportunities")
     wl = soup.find(class_='watchlist')
     if wl:
+        pdf.section_header("Watchlist - Additional Opportunities")
         items = wl.find_all(class_='watchlist-item')
         for item in items:
             pdf.check_page_break(35)
@@ -246,26 +236,26 @@ def parse_and_generate_pdf(html_content):
             pdf.rect(10, pdf.get_y(), 190, 30, 'F')
             pdf.set_xy(15, pdf.get_y() + 5)
             
-            h4 = item.find('h4').get_text(strip=True)
+            h4 = safe_get_text(item.find('h4'))
             pdf.set_font('Arial', 'B', 10)
             pdf.cell(0, 5, clean_text(h4), 0, 1)
             
             ps = item.find_all('p')
             pdf.set_font('Arial', '', 9)
             for p in ps:
-                pdf.cell(0, 5, clean_text(p.get_text(strip=True)), 0, 1)
+                pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
             pdf.ln(5)
 
     # 6. Notes
-    pdf.add_page()
-    pdf.section_header("Technical Market Notes")
     notes_div = soup.find(class_='market-notes')
     if notes_div:
+        pdf.add_page()
+        pdf.section_header("Technical Market Notes")
         lis = notes_div.find_all('li')
         pdf.set_font('Arial', '', 9)
         for li in lis:
             pdf.cell(5, 5, chr(149), 0, 0)
-            pdf.multi_cell(0, 5, clean_text(li.get_text(strip=True)))
+            pdf.multi_cell(0, 5, clean_text(safe_get_text(li)))
             pdf.ln(2)
 
     return pdf
