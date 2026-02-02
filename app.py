@@ -40,7 +40,7 @@ class PDF(FPDF):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
         self.set_text_color(128, 128, 128)
-        self.cell(0, 10, clean_text(f'Blueberry AI Trader | Page {self.page_no()}'), 0, 0, 'C')
+        self.cell(0, 10, clean_text(f'BlueBerry AI Trader | Page {self.page_no()}'), 0, 0, 'C')
 
     def check_page_break(self, height_needed):
         if self.get_y() + height_needed > 270:
@@ -171,7 +171,7 @@ def parse_and_generate_pdf(html_content):
     # 2. INDEX STATUS (FIXED for both formats)
     # Search method A: Section Header
     idx_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Index' in safe_get_text(t) and ('Status' in safe_get_text(t) or 'Analysis' in safe_get_text(t)))
-    # Search method B: Text Anchor
+    # Search method B: Text Anchor (Level: OR Current Level)
     idx_anchor = soup.find(string=re.compile(r"(Current Level|Level:)"))
     
     idx_card = None
@@ -249,9 +249,22 @@ def parse_and_generate_pdf(html_content):
             setup_el = card.find(class_='setup-type')
             setup = safe_get_text(setup_el)
             
+            # 1. Default Mode
             mode = 'buy'
-            if setup_el and ('tab-reduce' in setup.lower() or 'Risk Zone' in setup.lower() or 'sell' in setup.lower()): mode = 'sell'
+            if setup_el and ('exit' in setup.lower() or 'reduce' in setup.lower() or 'sell' in setup.lower()): mode = 'sell'
+            if setup_el and ('distribution' in setup.lower()): mode = 'sell'
             
+            # 2. Context Mode Override (Check Tab Parent)
+            # Climb parents to find if we are in a #tab-open or #tab-reduce
+            curr = card.parent
+            for _ in range(4):
+                if curr:
+                    cid = curr.get('id', '').lower()
+                    if 'open' in cid or 'pos' in cid: mode = 'open'
+                    elif 'reduce' in cid or 'sell' in cid or 'distrib' in cid: mode = 'sell'
+                    curr = curr.parent
+                else: break
+
             table = {}
             if card.find(class_='trade-params'):
                 for b in card.find(class_='trade-params').find_all(class_='param-box'):
@@ -263,12 +276,6 @@ def parse_and_generate_pdf(html_content):
             rationale = safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip()
             conf = safe_get_text(card.find(class_='confidence'))
             
-            # Check context for Open Positions
-            curr = card.parent
-            for _ in range(3):
-                if curr and ("Open Positions" in safe_get_text(curr.find_previous_sibling('h2'))): mode = 'open'
-                curr = curr.parent if curr else None
-
             cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode})
             
     # Logic B: Generic Cards (Tabbed Style)
@@ -277,7 +284,7 @@ def parse_and_generate_pdf(html_content):
         for tab in tabs:
             tab_id = tab.get('id', '').lower()
             mode = 'buy'
-            if 'tab-reduce' in tab_id or 'Risk Zone' in tab_id: mode = 'sell'
+            if 'sell' in tab_id or 'reduce' in tab_id: mode = 'sell'
             elif 'open' in tab_id: mode = 'open'
             elif 'watch' in tab_id or 'index' in tab_id or 'market' in tab_id or 'notes' in tab_id: continue
             
@@ -314,10 +321,10 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Open Positions Management")
         for c in opens: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='open')
     if buys:
-        pdf.section_header("Positioning Ideas")
+        pdf.section_header("Top Buy Opportunities")
         for c in buys: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='buy')
     if sells:
-        pdf.section_header("Distribution Ideas")
+        pdf.section_header("Reduce/Exit Recommendations")
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
     # 5. WATCHLIST
