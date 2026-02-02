@@ -277,7 +277,7 @@ def parse_and_generate_pdf(html_content):
         for tab in tabs:
             tab_id = tab.get('id', '').lower()
             mode = 'buy'
-            if 'distribution zonw' in tab_id or 'reduce' in tab_id: mode = 'sell'
+            if 'distribution zone' in tab_id or 'reduce' in tab_id: mode = 'sell'
             elif 'open' in tab_id: mode = 'open'
             elif 'watch' in tab_id or 'index' in tab_id or 'market' in tab_id or 'notes' in tab_id: continue
             
