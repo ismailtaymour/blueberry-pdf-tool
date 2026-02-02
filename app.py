@@ -321,10 +321,10 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Open Positions Management")
         for c in opens: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='open')
     if buys:
-        pdf.section_header("Top Buy Opportunities")
+        pdf.section_header("Positioning Ideas")
         for c in buys: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='buy')
     if sells:
-        pdf.section_header("Reduce/Exit Recommendations")
+        pdf.section_header("Distribution Ideas)
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
     # 5. WATCHLIST
