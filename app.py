@@ -47,7 +47,11 @@ class PDF(FPDF):
             self.add_page()
 
     def section_header(self, title):
-        self.check_page_break(20)
+        # Force a page break for new headers, unless we are already at the top of a page
+        # (Header ends around Y=45. If Y > 60, we have content above us -> Break)
+        if self.get_y() > 60:
+            self.add_page()
+            
         self.ln(5)
         self.set_font('Arial', 'B', 14)
         self.set_text_color(44, 62, 80)
@@ -69,7 +73,8 @@ class PDF(FPDF):
         self.set_xy(15, start_y + 12)
         self.set_font('Arial', '', 10)
         self.set_text_color(60, 0, 0)
-        self.multi_cell(180, 5, clean_text(text))
+        # FORCE LEFT ALIGNMENT
+        self.multi_cell(180, 5, clean_text(text), align='L')
         self.ln(5)
         self.set_line_width(0.2)
 
@@ -98,7 +103,8 @@ class PDF(FPDF):
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', '', 9)
         for line in details:
-            self.multi_cell(0, 5, clean_text(line))
+            # FORCE LEFT ALIGNMENT
+            self.multi_cell(0, 5, clean_text(line), align='L')
             self.ln(1)
 
         if table_data:
@@ -120,7 +126,8 @@ class PDF(FPDF):
             self.rect(10, self.get_y(), 190, 15, 'F')
             self.set_xy(12, self.get_y()+2)
             self.set_font('Arial', 'I', 9)
-            self.multi_cell(186, 5, f"Rationale: {clean_text(rationale)}")
+            # FORCE LEFT ALIGNMENT
+            self.multi_cell(186, 5, f"Rationale: {clean_text(rationale)}", align='L')
         
         if confidence:
             self.ln(2)
@@ -147,7 +154,8 @@ class PDF(FPDF):
         self.cell(0, 5, clean_text(title), 0, 1)
         self.set_xy(15, start_y + 10)
         self.set_font('Arial', '', 8)
-        self.multi_cell(180, 4, clean_text(text))
+        # FORCE LEFT ALIGNMENT
+        self.multi_cell(180, 4, clean_text(text), align='L')
         self.ln(5)
 
 # --- 3. ROBUST PARSER ---
@@ -168,10 +176,8 @@ def parse_and_generate_pdf(html_content):
             text = text.replace(title, "").strip()
             pdf.alert_box(title, text)
 
-    # 2. INDEX STATUS (FIXED for both formats)
-    # Search method A: Section Header
+    # 2. INDEX STATUS
     idx_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Index' in safe_get_text(t) and ('Status' in safe_get_text(t) or 'Analysis' in safe_get_text(t)))
-    # Search method B: Text Anchor (Level: OR Current Level)
     idx_anchor = soup.find(string=re.compile(r"(Current Level|Level:)"))
     
     idx_card = None
@@ -185,15 +191,11 @@ def parse_and_generate_pdf(html_content):
         pdf.set_font('Arial', '', 9)
         pdf.set_fill_color(250, 250, 250)
         
-        # Try finding row divs (List Style)
         rows = idx_card.find_all(class_='metric-row')
-        # Fallback to generic divs with metric class (Tab Style)
         if not rows: rows = idx_card.find_all(class_='metric')
         
         for i in range(0, len(rows), 2):
             l1, v1, l2, v2 = "", "", "", ""
-            
-            # Row 1 Processing
             if rows[i].find(class_='metric-label'):
                 l1 = safe_get_text(rows[i].find(class_='metric-label'))
                 v1 = safe_get_text(rows[i].find(class_='metric-value'))
@@ -205,7 +207,6 @@ def parse_and_generate_pdf(html_content):
             pdf.cell(35, 7, clean_text(l1), 1, 0, 'L', fill=True)
             pdf.cell(60, 7, clean_text(v1), 1, 0, 'L')
             
-            # Row 2 Processing (if exists)
             if i+1 < len(rows):
                 if rows[i+1].find(class_='metric-label'):
                     l2 = safe_get_text(rows[i+1].find(class_='metric-label'))
@@ -235,13 +236,13 @@ def parse_and_generate_pdf(html_content):
                 else:
                     pdf.set_font('Arial', '', 9)
                     pdf.set_text_color(0, 0, 0)
-                    pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)))
+                    # FORCE LEFT ALIGNMENT
+                    pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)), align='L')
                     pdf.ln(2)
 
-    # 4. CARD EXTRACTION (HYBRID)
+    # 4. CARD EXTRACTION
     cards_data = []
     
-    # Logic A: Explicit Setup Cards (List Style)
     if soup.find(class_='setup-card'):
         for card in soup.find_all(class_='setup-card'):
             ticker = safe_get_text(card.find(class_='ticker'))
@@ -249,13 +250,11 @@ def parse_and_generate_pdf(html_content):
             setup_el = card.find(class_='setup-type')
             setup = safe_get_text(setup_el)
             
-            # 1. Default Mode
             mode = 'buy'
             if setup_el and ('exit' in setup.lower() or 'reduce' in setup.lower() or 'sell' in setup.lower()): mode = 'sell'
             if setup_el and ('distribution' in setup.lower()): mode = 'sell'
             
-            # 2. Context Mode Override (Check Tab Parent)
-            # Climb parents to find if we are in a #tab-open or #tab-reduce
+            # Context Mode Override
             curr = card.parent
             for _ in range(4):
                 if curr:
@@ -278,7 +277,6 @@ def parse_and_generate_pdf(html_content):
             
             cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode})
             
-    # Logic B: Generic Cards (Tabbed Style)
     else:
         tabs = soup.find_all(class_='tab-content')
         for tab in tabs:
@@ -321,10 +319,10 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Open Positions Management")
         for c in opens: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='open')
     if buys:
-        pdf.section_header("Positioning Ideas")
+        pdf.section_header("Top Buy Opportunities")
         for c in buys: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='buy')
     if sells:
-        pdf.section_header("Distribution Ideas")
+        pdf.section_header("Reduce/Exit Recommendations")
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
     # 5. WATCHLIST
@@ -354,7 +352,8 @@ def parse_and_generate_pdf(html_content):
             pdf.section_header("Technical Market Notes")
             for li in lis:
                 pdf.cell(5, 5, chr(149), 0, 0)
-                pdf.multi_cell(0, 5, clean_text(safe_get_text(li)))
+                # FORCE LEFT ALIGNMENT
+                pdf.multi_cell(0, 5, clean_text(safe_get_text(li)), align='L')
                 pdf.ln(2)
 
     disc = soup.find(class_='disclaimer')
