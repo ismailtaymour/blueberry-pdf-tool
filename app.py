@@ -250,7 +250,7 @@ def parse_and_generate_pdf(html_content):
             setup = safe_get_text(setup_el)
             
             mode = 'buy'
-            if setup_el and ('Distribution Zone' in setup.lower() or 'Risk Zone' in setup.lower() or 'sell' in setup.lower()): mode = 'sell'
+            if setup_el and ('tab-reduce' in setup.lower() or 'Risk Zone' in setup.lower() or 'sell' in setup.lower()): mode = 'sell'
             
             table = {}
             if card.find(class_='trade-params'):
@@ -277,7 +277,7 @@ def parse_and_generate_pdf(html_content):
         for tab in tabs:
             tab_id = tab.get('id', '').lower()
             mode = 'buy'
-            if 'distribution zone' in tab_id or 'Risk Zone' in tab_id: mode = 'sell'
+            if 'tab-reduce' in tab_id or 'Risk Zone' in tab_id: mode = 'sell'
             elif 'open' in tab_id: mode = 'open'
             elif 'watch' in tab_id or 'index' in tab_id or 'market' in tab_id or 'notes' in tab_id: continue
             
