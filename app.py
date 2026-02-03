@@ -1,6 +1,6 @@
 import streamlit as st
 from fpdf import FPDF
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 import tempfile
 import re
 
@@ -47,9 +47,6 @@ class PDF(FPDF):
             self.add_page()
 
     def section_header(self, title, new_page=False):
-        # Strict Page Break Logic:
-        # If new_page=True, ALWAYS add a page.
-        # If new_page=False, only add page if we are at the very bottom (safety).
         if new_page:
             self.add_page()
         elif self.get_y() > 250: 
@@ -76,7 +73,6 @@ class PDF(FPDF):
         self.set_xy(15, start_y + 12)
         self.set_font('Arial', '', 10)
         self.set_text_color(60, 0, 0)
-        # STRICT LEFT ALIGN
         self.multi_cell(180, 5, clean_text(text), align='L')
         self.ln(5)
         self.set_line_width(0.2)
@@ -106,7 +102,6 @@ class PDF(FPDF):
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', '', 9)
         for line in details:
-            # STRICT LEFT ALIGN
             self.multi_cell(0, 5, clean_text(line), align='L')
             self.ln(1)
 
@@ -129,7 +124,6 @@ class PDF(FPDF):
             self.rect(10, self.get_y(), 190, 15, 'F')
             self.set_xy(12, self.get_y()+2)
             self.set_font('Arial', 'I', 9)
-            # STRICT LEFT ALIGN
             self.multi_cell(186, 5, f"Rationale: {clean_text(rationale)}", align='L')
         
         if confidence:
@@ -157,7 +151,6 @@ class PDF(FPDF):
         self.cell(0, 5, clean_text(title), 0, 1)
         self.set_xy(15, start_y + 10)
         self.set_font('Arial', '', 8)
-        # STRICT LEFT ALIGN
         self.multi_cell(180, 4, clean_text(text), align='L')
         self.ln(5)
 
@@ -168,16 +161,25 @@ def parse_and_generate_pdf(html_content):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # 1. ALERT BOX
-    alert = soup.find(class_='alert-box') or soup.find(string=re.compile("EXTREME CAUTION"))
-    if alert:
-        if not hasattr(alert, 'find'): alert = alert.parent
-        if alert:
-            head = alert.find(['h3', 'h4', 'strong'])
-            title = safe_get_text(head) if head else "MARKET ALERT"
-            text = safe_get_text(alert.find('p')) or safe_get_text(alert)
-            text = text.replace(title, "").strip()
-            pdf.alert_box(title, text)
+    # 1. ALERT BOX - Strict Container Check
+    alert_tag = soup.find(class_='alert-box')
+    
+    # If no class found, search for text, but ensure we get the PARENT TAG, not the string
+    if not alert_tag:
+        alert_text = soup.find(string=re.compile("EXTREME CAUTION"))
+        if alert_text:
+            alert_tag = alert_text.parent
+            # Climb up one more level if we just hit a bold tag or similar
+            if alert_tag.name in ['b', 'strong', 'h3', 'h4']:
+                alert_tag = alert_tag.parent
+
+    if alert_tag:
+        # Now we are safe to use .find() because alert_tag is an Element, not a String
+        head = alert_tag.find(['h3', 'h4', 'strong'])
+        title = safe_get_text(head) if head else "MARKET ALERT"
+        text = safe_get_text(alert_tag.find('p')) or safe_get_text(alert_tag)
+        text = text.replace(title, "").strip()
+        pdf.alert_box(title, text)
 
     # 2. INDEX STATUS (NO New Page)
     idx_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Index' in safe_get_text(t) and ('Status' in safe_get_text(t) or 'Analysis' in safe_get_text(t)))
@@ -190,7 +192,6 @@ def parse_and_generate_pdf(html_content):
         idx_card = idx_anchor.find_parent(class_=['index-card', 'card']) or idx_anchor.find_parent('div').find_parent('div')
 
     if idx_card:
-        # new_page=False to keep with Alert
         pdf.section_header("Index Technical Status", new_page=False)
         pdf.set_font('Arial', '', 9)
         pdf.set_fill_color(250, 250, 250)
@@ -225,10 +226,9 @@ def parse_and_generate_pdf(html_content):
             else:
                 pdf.ln()
 
-    # 3. MARKET ASSESSMENT (NO New Page - Groups with Index)
+    # 3. MARKET ASSESSMENT (NO New Page)
     assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend' in safe_get_text(t))
     if assess_header:
-        # new_page=False to keep with Index
         pdf.section_header("Market Trend Assessment", new_page=False)
         content = assess_header.find_next_sibling('div') or assess_header.parent.find(class_='market-assessment') or assess_header.parent.find(class_='card')
         if content:
@@ -241,12 +241,13 @@ def parse_and_generate_pdf(html_content):
                 else:
                     pdf.set_font('Arial', '', 9)
                     pdf.set_text_color(0, 0, 0)
-                    # STRICT LEFT ALIGN
                     pdf.multi_cell(0, 5, clean_text(safe_get_text(tag)), align='L')
                     pdf.ln(2)
 
     # 4. CARD EXTRACTION
     cards_data = []
+    
+    # Logic A: List Style
     if soup.find(class_='setup-card'):
         for card in soup.find_all(class_='setup-card'):
             ticker = safe_get_text(card.find(class_='ticker'))
@@ -280,6 +281,7 @@ def parse_and_generate_pdf(html_content):
             
             cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode})
             
+    # Logic B: Tabbed Style
     else:
         tabs = soup.find_all(class_='tab-content')
         for tab in tabs:
@@ -313,7 +315,7 @@ def parse_and_generate_pdf(html_content):
                 
                 cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': "", 'c': "", 'm': mode})
 
-    # Render - FORCE NEW PAGE for these sections
+    # Render
     opens = [c for c in cards_data if c['m'] == 'open']
     buys = [c for c in cards_data if c['m'] == 'buy']
     sells = [c for c in cards_data if c['m'] == 'sell']
@@ -328,7 +330,7 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Reduce/Exit Recommendations", new_page=True)
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
-    # 5. WATCHLIST (FORCE NEW PAGE)
+    # 5. WATCHLIST
     wl_section = soup.find(class_='watchlist') or soup.find(id='watch')
     if wl_section:
         pdf.section_header("Watchlist - Additional Opportunities", new_page=True)
@@ -345,7 +347,7 @@ def parse_and_generate_pdf(html_content):
             for p in item.find_all('p'): pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
             pdf.ln(5)
 
-    # 6. NOTES (FORCE NEW PAGE)
+    # 6. NOTES
     notes_head = soup.find(lambda t: t.name in ['h2','h3'] and 'Notes' in safe_get_text(t))
     if notes_head:
         container = notes_head.find_next_sibling('div') or notes_head.parent
@@ -354,11 +356,9 @@ def parse_and_generate_pdf(html_content):
             pdf.section_header("Technical Market Notes", new_page=True)
             for li in lis:
                 pdf.cell(5, 5, chr(149), 0, 0)
-                # STRICT LEFT ALIGN
                 pdf.multi_cell(0, 5, clean_text(safe_get_text(li)), align='L')
                 pdf.ln(2)
 
-    # 7. DISCLAIMER
     disc = soup.find(class_='disclaimer')
     if disc:
         title = safe_get_text(disc.find(['h3', 'h4'])) or "Important Disclaimer"
