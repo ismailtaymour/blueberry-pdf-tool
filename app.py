@@ -1,9 +1,8 @@
 import streamlit as st
 from fpdf import FPDF
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 import tempfile
 import re
-import math
 
 # --- 1. CLEANING FUNCTIONS ---
 def clean_text(text):
@@ -65,68 +64,21 @@ class PDF(FPDF):
         self.set_fill_color(255, 235, 238)
         self.set_draw_color(231, 76, 60)
         self.set_line_width(0.5)
-        self.rect(10, self.get_y(), 190, 35, 'DF')
-        
-        self.set_x(15)
-        self.set_y(self.get_y() + 5)
+        start_y = self.get_y()
+        self.rect(10, start_y, 190, 35, 'DF')
+        self.set_xy(15, start_y + 5)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(192, 57, 43)
         self.cell(0, 5, clean_text(title), 0, 1)
-        
-        self.set_x(15)
+        self.set_xy(15, start_y + 12)
         self.set_font('Arial', '', 10)
         self.set_text_color(60, 0, 0)
         self.multi_cell(180, 5, clean_text(text), align='L')
         self.ln(5)
         self.set_line_width(0.2)
 
-    def table_row(self, texts, widths, fills, aligns):
-        """
-        Draws a table row with text wrapping and equal height cells.
-        """
-        # 1. Calculate Max Height based on text content
-        line_height = 5
-        row_heights = []
-        for i, text in enumerate(texts):
-            # Estimate lines needed (width of text / width of column)
-            w_text = self.get_string_width(text)
-            w_col = widths[i] - 4 # padding buffer
-            lines = math.ceil(w_text / w_col) if w_text > w_col else 1
-            row_heights.append(lines * line_height)
-        
-        max_h = max(row_heights) if row_heights else line_height
-        if max_h < 8: max_h = 8 # Minimum height
-        
-        # Check Page Break
-        self.check_page_break(max_h)
-        
-        # 2. Render Cells
-        x_start = 10 # Left margin
-        y_start = self.get_y()
-        
-        for i, text in enumerate(texts):
-            w = widths[i]
-            self.set_xy(x_start, y_start)
-            
-            # Background
-            if fills[i]:
-                self.set_fill_color(250, 250, 250)
-                self.rect(x_start, y_start, w, max_h, 'FD') # Fill and Draw Border
-            else:
-                self.rect(x_start, y_start, w, max_h, 'D') # Draw Border only
-                
-            # Text
-            self.set_xy(x_start, y_start + 1) # Small top padding
-            self.multi_cell(w, 5, text, 0, aligns[i])
-            
-            x_start += w
-            
-        self.set_y(y_start + max_h)
-
     def content_card(self, ticker, name, setup_type, details, table_data, rationale, confidence, mode='buy'):
         self.check_page_break(80)
-        
-        # Colors
         if mode == 'sell':
             head_fill, badge_fill = (231, 76, 60), (192, 57, 43)
         elif mode == 'open':
@@ -134,7 +86,6 @@ class PDF(FPDF):
         else:
             head_fill, badge_fill = (52, 152, 219), (41, 128, 185)
 
-        # Header
         self.set_fill_color(*head_fill)
         self.set_text_color(255, 255, 255)
         self.set_font('Arial', 'B', 12)
@@ -148,40 +99,26 @@ class PDF(FPDF):
         self.cell(65, 8, clean_text(setup_type), 0, 1, 'C', fill=True)
         self.ln(2)
 
-        # Details
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', '', 9)
         for line in details:
             self.multi_cell(0, 5, clean_text(line), align='L')
             self.ln(1)
 
-        # Dynamic Table (Fixes Overflow)
         if table_data:
             self.ln(2)
+            self.set_font('Arial', 'B', 8)
+            self.set_fill_color(245, 245, 245)
             self.set_draw_color(200, 200, 200)
-            
-            # Prepare Headers
-            cols = len(table_data)
-            if cols > 0:
-                col_width = 190 / cols
-                widths = [col_width] * cols
-                
-                # Print Headers
-                self.set_font('Arial', 'B', 8)
-                self.set_fill_color(245, 245, 245)
-                self.set_text_color(0,0,0)
-                # Headers usually short, cell is fine, but table_row works too
-                headers = list(table_data.keys())
-                self.table_row([clean_text(h) for h in headers], widths, [True]*cols, ['C']*cols)
-                
-                # Print Values (Using Wrap-Safe method)
-                self.set_font('Arial', '', 9)
-                values = [clean_text(str(v)) for v in table_data.values()]
-                self.table_row(values, widths, [False]*cols, ['C']*cols)
-                
-            self.ln(5)
+            col_width = 190 / len(table_data)
+            for key in table_data.keys():
+                self.cell(col_width, 6, clean_text(key), 1, 0, 'C', fill=True)
+            self.ln()
+            self.set_font('Arial', '', 9)
+            for val in table_data.values():
+                self.cell(col_width, 8, clean_text(str(val)), 1, 0, 'C')
+            self.ln(10)
 
-        # Rationale
         if rationale:
             self.set_fill_color(245, 248, 250)
             self.rect(10, self.get_y(), 190, 15, 'F')
@@ -189,7 +126,6 @@ class PDF(FPDF):
             self.set_font('Arial', 'I', 9)
             self.multi_cell(186, 5, f"Rationale: {clean_text(rationale)}", align='L')
         
-        # Confidence
         if confidence:
             self.ln(2)
             self.set_font('Arial', 'B', 9)
@@ -197,7 +133,6 @@ class PDF(FPDF):
             elif "MEDIUM" in confidence: self.set_text_color(243, 156, 18)
             else: self.set_text_color(192, 57, 43)
             self.cell(0, 5, clean_text(confidence), 0, 1, 'R')
-        
         self.ln(5)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(5)
@@ -208,12 +143,13 @@ class PDF(FPDF):
         self.set_fill_color(255, 250, 240)
         self.set_draw_color(243, 156, 18)
         self.set_line_width(0.5)
-        self.rect(10, self.get_y(), 190, 30, 'DF')
-        self.set_xy(15, self.get_y() + 4)
+        start_y = self.get_y()
+        self.rect(10, start_y, 190, 30, 'DF')
+        self.set_xy(15, start_y + 4)
         self.set_font('Arial', 'B', 10)
         self.set_text_color(160, 100, 0)
         self.cell(0, 5, clean_text(title), 0, 1)
-        self.set_xy(15, self.get_y() + 5)
+        self.set_xy(15, start_y + 10)
         self.set_font('Arial', '', 8)
         self.multi_cell(180, 4, clean_text(text), align='L')
         self.ln(5)
@@ -225,18 +161,24 @@ def parse_and_generate_pdf(html_content):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # 1. ALERT BOX
+    # 1. ALERT BOX (Fixed Logic)
     alert = soup.find(class_='alert-box') or soup.find(string=re.compile("EXTREME CAUTION"))
     if alert:
-        if not hasattr(alert, 'find'): alert = alert.parent
-        if alert:
-            head = alert.find(['h3', 'h4', 'strong'])
-            title = safe_get_text(head) if head else "MARKET ALERT"
-            text = safe_get_text(alert.find('p')) or safe_get_text(alert)
-            text = text.replace(title, "").strip()
-            pdf.alert_box(title, text)
+        # Check if we found a NavigableString (text) instead of a Tag
+        if isinstance(alert, NavigableString):
+            alert = alert.parent
+            # Climb up if we hit a formatting tag like <b> or <h3>
+            if alert.name in ['b', 'strong', 'h3', 'h4', 'span']:
+                alert = alert.parent
 
-    # 2. INDEX STATUS (Using Table Row Fix)
+    if alert and not isinstance(alert, NavigableString):
+        head = alert.find(['h3', 'h4', 'strong'])
+        title = safe_get_text(head) if head else "MARKET ALERT"
+        text = safe_get_text(alert.find('p')) or safe_get_text(alert)
+        text = text.replace(title, "").strip()
+        pdf.alert_box(title, text)
+
+    # 2. INDEX STATUS
     idx_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Index' in safe_get_text(t) and ('Status' in safe_get_text(t) or 'Analysis' in safe_get_text(t)))
     idx_anchor = soup.find(string=re.compile(r"(Current Level|Level:)"))
     
@@ -249,14 +191,13 @@ def parse_and_generate_pdf(html_content):
     if idx_card:
         pdf.section_header("Index Technical Status", new_page=False)
         pdf.set_font('Arial', '', 9)
-        pdf.set_text_color(0,0,0)
+        pdf.set_fill_color(250, 250, 250)
         
         rows = idx_card.find_all(class_='metric-row')
         if not rows: rows = idx_card.find_all(class_='metric')
         
         for i in range(0, len(rows), 2):
             l1, v1, l2, v2 = "", "", "", ""
-            # Extractor 1
             if rows[i].find(class_='metric-label'):
                 l1 = safe_get_text(rows[i].find(class_='metric-label'))
                 v1 = safe_get_text(rows[i].find(class_='metric-value'))
@@ -265,7 +206,9 @@ def parse_and_generate_pdf(html_content):
                 if len(spans) > 0: l1 = safe_get_text(spans[0])
                 if len(spans) > 1: v1 = safe_get_text(spans[1])
 
-            # Extractor 2
+            pdf.cell(35, 7, clean_text(l1), 1, 0, 'L', fill=True)
+            pdf.cell(60, 7, clean_text(v1), 1, 0, 'L')
+            
             if i+1 < len(rows):
                 if rows[i+1].find(class_='metric-label'):
                     l2 = safe_get_text(rows[i+1].find(class_='metric-label'))
@@ -274,15 +217,11 @@ def parse_and_generate_pdf(html_content):
                     spans = rows[i+1].find_all('span')
                     if len(spans) > 0: l2 = safe_get_text(spans[0])
                     if len(spans) > 1: v2 = safe_get_text(spans[1])
-            
-            # Print Row using Wrap-Safe Table Engine
-            # Widths: Label(35), Value(60), Label(35), Value(60)
-            row_texts = [clean_text(l1), clean_text(v1), clean_text(l2), clean_text(v2)]
-            row_widths = [35, 60, 35, 60]
-            row_fills = [True, False, True, False]
-            row_aligns = ['L', 'L', 'L', 'L']
-            
-            pdf.table_row(row_texts, row_widths, row_fills, row_aligns)
+                
+                pdf.cell(35, 7, clean_text(l2), 1, 0, 'L', fill=True)
+                pdf.cell(60, 7, clean_text(v2), 1, 1, 'L')
+            else:
+                pdf.ln()
 
     # 3. MARKET ASSESSMENT
     assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend' in safe_get_text(t))
@@ -305,7 +244,6 @@ def parse_and_generate_pdf(html_content):
     # 4. CARD EXTRACTION
     cards_data = []
     
-    # Logic A: Setup Cards
     if soup.find(class_='setup-card'):
         for card in soup.find_all(class_='setup-card'):
             ticker = safe_get_text(card.find(class_='ticker'))
@@ -339,7 +277,6 @@ def parse_and_generate_pdf(html_content):
             
             cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode})
             
-    # Logic B: Tabs
     else:
         tabs = soup.find_all(class_='tab-content')
         for tab in tabs:
@@ -373,7 +310,7 @@ def parse_and_generate_pdf(html_content):
                 
                 cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': "", 'c': "", 'm': mode})
 
-    # Render Groups
+    # Render
     opens = [c for c in cards_data if c['m'] == 'open']
     buys = [c for c in cards_data if c['m'] == 'buy']
     sells = [c for c in cards_data if c['m'] == 'sell']
@@ -417,10 +354,11 @@ def parse_and_generate_pdf(html_content):
                 pdf.multi_cell(0, 5, clean_text(safe_get_text(li)), align='L')
                 pdf.ln(2)
 
-    # 7. DISCLAIMER
+    # 7. DISCLAIMER (Fixed Logic)
     disc = soup.find(class_='disclaimer')
-    if disc:
-        title = safe_get_text(disc.find(['h3', 'h4'])) or "Important Disclaimer"
+    if disc and not isinstance(disc, NavigableString):
+        title_tag = disc.find(['h3', 'h4'])
+        title = safe_get_text(title_tag) if title_tag else "Important Disclaimer"
         text = safe_get_text(disc).replace(title, "").strip()
         pdf.disclaimer_box(title, text)
 
