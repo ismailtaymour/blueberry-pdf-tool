@@ -48,10 +48,14 @@ class PDF(FPDF):
         if self.get_y() + height_needed > 270:
             self.add_page()
 
-    def section_header(self, title, new_page=False):
-        # SAFETY RESET: Ensure margins are correct before starting a new section
+    def reset_margins(self):
+        """Aggressively reset margins to default."""
         self.set_left_margin(10)
         self.set_right_margin(10)
+        self.set_x(10)
+
+    def section_header(self, title, new_page=False):
+        self.reset_margins()
         
         if new_page:
             self.add_page()
@@ -66,10 +70,9 @@ class PDF(FPDF):
         self.ln(3)
 
     def alert_box(self, title, text):
-        self.set_left_margin(10) # Safety reset
+        self.reset_margins()
         self.set_font('Arial', '', 10)
         
-        # Calculate dynamic height
         lines = len(self.multi_cell(180, 5, clean_text(text), split_only=True))
         h_needed = (lines * 5) + 20 
         
@@ -96,13 +99,13 @@ class PDF(FPDF):
 
     def table_row(self, texts, widths, fills, aligns):
         """
-        Draws a table row with auto-expanding height and COLUMN-AWARE margins.
+        Draws a table row with column-aware margins, then resets globally.
         """
         line_height = 5
         font_size = 9
         self.set_font('Arial', '', font_size)
         
-        # 1. Calculate max height required for this row
+        # 1. Calculate max height
         cell_heights = []
         for i, text in enumerate(texts):
             w = widths[i]
@@ -115,12 +118,12 @@ class PDF(FPDF):
         
         # 2. Draw Cells
         y_start = self.get_y()
-        x_start = 10 # Start at page left margin
+        x_start = 10 
         
         for i, text in enumerate(texts):
             w = widths[i]
             
-            # Draw Background & Border
+            # Background
             self.set_xy(x_start, y_start)
             if fills[i]:
                 self.set_fill_color(250, 250, 250)
@@ -128,20 +131,20 @@ class PDF(FPDF):
             else:
                 self.rect(x_start, y_start, w, row_height, 'D')
                 
-            # Draw Text
-            # CRITICAL: Temporarily set left margin to this column so text wraps INSIDE the cell
+            # Text (Set margin locally for this cell)
             self.set_left_margin(x_start) 
             self.set_xy(x_start, y_start + 1.5)
             self.multi_cell(w, line_height, text, 0, aligns[i])
             
             x_start += w
             
-        # CRITICAL: RESTORE MARGIN to default (10) so subsequent text doesn't get squeezed
+        # 3. GLOBAL RESET
         self.set_left_margin(10)
+        self.set_x(10)
         self.set_y(y_start + row_height)
 
     def content_card(self, ticker, name, setup_type, details, table_data, rationale, confidence, mode='buy'):
-        self.set_left_margin(10) # Safety reset
+        self.reset_margins()
         self.check_page_break(80)
         
         if mode == 'sell':
@@ -168,9 +171,9 @@ class PDF(FPDF):
         # Details
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', '', 9)
-        self.set_left_margin(10) # Ensure full width
+        self.reset_margins() # Ensure full width for details
         for line in details:
-            self.multi_cell(190, 5, clean_text(line), align='L') # Explicit full width
+            self.multi_cell(190, 5, clean_text(line), align='L') 
             self.ln(1)
 
         # Dynamic Table
@@ -182,14 +185,12 @@ class PDF(FPDF):
                 col_width = 190 / cols
                 widths = [col_width] * cols
                 
-                # Headers
                 self.set_font('Arial', 'B', 8)
                 self.set_fill_color(245, 245, 245)
                 self.set_text_color(0,0,0)
                 headers = [clean_text(h) for h in table_data.keys()]
                 self.table_row(headers, widths, [True]*cols, ['C']*cols)
                 
-                # Values
                 self.set_font('Arial', '', 9)
                 values = [clean_text(str(v)) for v in table_data.values()]
                 self.table_row(values, widths, [False]*cols, ['C']*cols)
@@ -197,10 +198,10 @@ class PDF(FPDF):
 
         # Rationale
         if rationale:
+            self.reset_margins()
             self.set_fill_color(245, 248, 250)
             self.set_font('Arial', 'I', 9)
             
-            # Dynamic height
             w_text = 186
             lines = len(self.multi_cell(w_text, 5, f"Rationale: {clean_text(rationale)}", split_only=True))
             h_needed = (lines * 5) + 4
@@ -224,7 +225,7 @@ class PDF(FPDF):
         self.ln(5)
 
     def disclaimer_box(self, title, text):
-        self.set_left_margin(10) # Safety reset
+        self.reset_margins()
         self.check_page_break(35)
         self.ln(5)
         self.set_fill_color(255, 250, 240)
@@ -326,8 +327,9 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Market Trend Assessment", new_page=False)
         content = assess_header.find_next_sibling('div') or assess_header.parent.find(class_='market-assessment') or assess_header.parent.find(class_='card')
         if content:
-            pdf.set_left_margin(10) # Ensure full width
+            pdf.reset_margins() # SAFETY RESET
             for tag in content.find_all(['h3', 'p']):
+                pdf.set_x(10) # RESET X before printing each block
                 if tag.name == 'h3':
                     pdf.ln(3)
                     pdf.set_font('Arial', 'B', 10)
@@ -336,7 +338,7 @@ def parse_and_generate_pdf(html_content):
                 else:
                     pdf.set_font('Arial', '', 9)
                     pdf.set_text_color(0, 0, 0)
-                    pdf.multi_cell(190, 5, clean_text(safe_get_text(tag)), align='L') # Explicit 190 width
+                    pdf.multi_cell(190, 5, clean_text(safe_get_text(tag)), align='L')
                     pdf.ln(2)
 
     # 4. CARD EXTRACTION
@@ -427,7 +429,7 @@ def parse_and_generate_pdf(html_content):
     wl_section = soup.find(class_='watchlist') or soup.find(id='watch')
     if wl_section:
         pdf.section_header("Watchlist - Additional Opportunities", new_page=True)
-        pdf.set_left_margin(10)
+        pdf.reset_margins()
         items = wl_section.find_all(class_='watchlist-item') or wl_section.find_all(class_='card')
         for item in items:
             pdf.check_page_break(35)
@@ -451,7 +453,7 @@ def parse_and_generate_pdf(html_content):
         lis = container.find_all('li')
         if lis:
             pdf.section_header("Technical Market Notes", new_page=True)
-            pdf.set_left_margin(10)
+            pdf.reset_margins()
             for li in lis:
                 pdf.set_x(10)
                 pdf.cell(5, 5, chr(149), 0, 0)
