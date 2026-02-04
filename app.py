@@ -49,7 +49,7 @@ class PDF(FPDF):
             self.add_page()
 
     def reset_margins(self):
-        """Aggressively reset margins to default."""
+        """Force reset margins to page default to prevent 'vertical text' bug."""
         self.set_left_margin(10)
         self.set_right_margin(10)
         self.set_x(10)
@@ -138,8 +138,9 @@ class PDF(FPDF):
             
             x_start += w
             
-        # 3. GLOBAL RESET
+        # 3. GLOBAL RESET - Critical fix for vertical text
         self.set_left_margin(10)
+        self.set_right_margin(10)
         self.set_x(10)
         self.set_y(y_start + row_height)
 
@@ -329,7 +330,7 @@ def parse_and_generate_pdf(html_content):
         if content:
             pdf.reset_margins() # SAFETY RESET
             for tag in content.find_all(['h3', 'p']):
-                pdf.set_x(10) # RESET X before printing each block
+                pdf.set_x(10) 
                 if tag.name == 'h3':
                     pdf.ln(3)
                     pdf.set_font('Arial', 'B', 10)
