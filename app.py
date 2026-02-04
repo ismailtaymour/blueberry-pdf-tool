@@ -41,7 +41,7 @@ class PDF(FPDF):
         self.cell(0, 5, clean_text('AI-Generated Technical Analysis | For Informational Purposes Only'), 0, 1, 'C')
         self.set_font('Arial', '', 9)
         self.set_text_color(200, 200, 200)
-        self.cell(0, 8, clean_text('Report Generated: Feb 1, 2026 | EGX 30 Level: 47,662 | Cairo Time: 18:45 EET'), 0, 1, 'C')
+        self.cell(0, 8, clean_text('Report Generated: Feb 4, 2026 | EGX 30 Level: 47,662 | Cairo Time: 18:45 EET'), 0, 1, 'C')
         self.ln(15)
 
     def footer(self):
