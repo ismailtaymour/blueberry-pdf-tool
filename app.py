@@ -8,15 +8,13 @@ import math
 # --- 1. CLEANING FUNCTIONS ---
 def clean_text(text):
     if not text: return ""
-    # Replace smart quotes and dashes
     replacements = {
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' ',
-        '\t': ' ' # Tabs can break alignment
+        '\t': ' '
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-    # Strip non-latin characters to prevent crashes
     return text.encode('latin-1', 'ignore').decode('latin-1').strip()
 
 def safe_get_text(element):
@@ -65,7 +63,6 @@ class PDF(FPDF):
 
     def alert_box(self, title, text):
         self.set_font('Arial', '', 10)
-        # Calculate dynamic height
         lines = len(self.multi_cell(180, 5, clean_text(text), split_only=True))
         h_needed = (lines * 5) + 20 
         
@@ -92,7 +89,7 @@ class PDF(FPDF):
 
     def table_row(self, texts, widths, fills, aligns):
         """
-        Draws a table row with auto-expanding height to fit all text.
+        Draws a table row with correct margins to prevent vertical stacking issues.
         """
         line_height = 5
         font_size = 9
@@ -102,35 +99,39 @@ class PDF(FPDF):
         cell_heights = []
         for i, text in enumerate(texts):
             w = widths[i]
-            # Simulate multi_cell to get number of lines
+            # Simulate wrapping to count lines
             lines = len(self.multi_cell(w - 2, line_height, text, split_only=True))
-            h = max(lines * line_height, 8) # Minimum 8mm height
+            h = max(lines * line_height, 8)
             cell_heights.append(h)
             
         row_height = max(cell_heights)
         self.check_page_break(row_height)
         
         # 2. Draw Cells
-        x_start = 10
         y_start = self.get_y()
+        x_start = 10 # Page left margin
+        original_l_margin = self.l_margin
         
         for i, text in enumerate(texts):
             w = widths[i]
-            self.set_xy(x_start, y_start)
             
             # Draw Background & Border
+            self.set_xy(x_start, y_start)
             if fills[i]:
                 self.set_fill_color(250, 250, 250)
                 self.rect(x_start, y_start, w, row_height, 'FD')
             else:
                 self.rect(x_start, y_start, w, row_height, 'D')
                 
-            # Draw Text
-            self.set_xy(x_start, y_start + 1.5) # Slight top padding
+            # Draw Text (CRITICAL: Set margin so wrapping stays in column)
+            self.set_left_margin(x_start) 
+            self.set_xy(x_start, y_start + 1.5)
             self.multi_cell(w, line_height, text, 0, aligns[i])
             
             x_start += w
             
+        # Restore Margin and move down
+        self.set_left_margin(original_l_margin)
         self.set_y(y_start + row_height)
 
     def content_card(self, ticker, name, setup_type, details, table_data, rationale, confidence, mode='buy'):
@@ -160,7 +161,7 @@ class PDF(FPDF):
         # Details
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', '', 9)
-        self.set_x(10) # RESET CURSOR TO LEFT MARGIN (Fixes vertical text issue)
+        self.set_x(10)
         for line in details:
             self.multi_cell(0, 5, clean_text(line), align='L')
             self.ln(1)
@@ -190,9 +191,9 @@ class PDF(FPDF):
         # Rationale
         if rationale:
             self.set_fill_color(245, 248, 250)
-            
-            # Dynamic height for rationale box
             self.set_font('Arial', 'I', 9)
+            
+            # Dynamic height
             w_text = 186
             lines = len(self.multi_cell(w_text, 5, f"Rationale: {clean_text(rationale)}", split_only=True))
             h_needed = (lines * 5) + 4
@@ -228,7 +229,6 @@ class PDF(FPDF):
         
         start_y = self.get_y()
         self.rect(10, start_y, 190, h_needed, 'DF')
-        
         self.set_xy(15, start_y + 4)
         self.set_font('Arial', 'B', 10)
         self.set_text_color(160, 100, 0)
@@ -251,11 +251,12 @@ def parse_and_generate_pdf(html_content):
     if not alert_tag:
         alert_text = soup.find(string=re.compile("EXTREME CAUTION"))
         if alert_text:
-            alert_tag = alert_text.parent
-            if alert_tag.name in ['b', 'strong', 'h3', 'h4', 'span']:
-                alert_tag = alert_tag.parent
+            if isinstance(alert_text, NavigableString):
+                alert_tag = alert_text.parent
+                if alert_tag.name in ['b', 'strong', 'h3', 'h4', 'span']:
+                    alert_tag = alert_tag.parent
 
-    if alert_tag and not isinstance(alert_tag, NavigableString):
+    if alert_tag:
         head = alert_tag.find(['h3', 'h4', 'strong'])
         title = safe_get_text(head) if head else "MARKET ALERT"
         text = safe_get_text(alert_tag.find('p')) or safe_get_text(alert_tag)
@@ -318,7 +319,7 @@ def parse_and_generate_pdf(html_content):
         content = assess_header.find_next_sibling('div') or assess_header.parent.find(class_='market-assessment') or assess_header.parent.find(class_='card')
         if content:
             for tag in content.find_all(['h3', 'p']):
-                pdf.set_x(10) # RESET CURSOR
+                pdf.set_x(10)
                 if tag.name == 'h3':
                     pdf.ln(3)
                     pdf.set_font('Arial', 'B', 10)
@@ -399,7 +400,7 @@ def parse_and_generate_pdf(html_content):
                 
                 cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': "", 'c': "", 'm': mode})
 
-    # Render
+    # Render Groups (FORCE NEW PAGE)
     opens = [c for c in cards_data if c['m'] == 'open']
     buys = [c for c in cards_data if c['m'] == 'buy']
     sells = [c for c in cards_data if c['m'] == 'sell']
@@ -434,7 +435,7 @@ def parse_and_generate_pdf(html_content):
                 pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
             pdf.ln(5)
 
-    # 6. NOTES & DISCLAIMER
+    # 6. NOTES
     notes_head = soup.find(lambda t: t.name in ['h2','h3'] and 'Notes' in safe_get_text(t))
     if notes_head:
         container = notes_head.find_next_sibling('div') or notes_head.parent
@@ -447,8 +448,11 @@ def parse_and_generate_pdf(html_content):
                 pdf.multi_cell(0, 5, clean_text(safe_get_text(li)), align='L')
                 pdf.ln(2)
 
+    # 7. DISCLAIMER
     disc = soup.find(class_='disclaimer')
-    if disc and not isinstance(disc, NavigableString):
+    if disc:
+        if isinstance(disc, NavigableString):
+            disc = disc.parent
         title_tag = disc.find(['h3', 'h4'])
         title = safe_get_text(title_tag) if title_tag else "Important Disclaimer"
         text = safe_get_text(disc).replace(title, "").strip()
