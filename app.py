@@ -8,18 +8,14 @@ import math
 # --- 1. CLEANING FUNCTIONS ---
 def clean_text(text):
     if not text: return ""
-    # Normalize whitespace
     text = text.replace('\n', ' ').replace('\t', ' ').replace('\r', ' ')
     text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Replace smart quotes and symbols
     replacements = {
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' '
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-        
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
 def safe_get_text(element):
@@ -44,7 +40,6 @@ class PDF(FPDF):
         self.set_xy(10, 22)
         self.cell(0, 5, clean_text('AI-Generated Technical Analysis | For Informational Purposes Only'), 0, 1, 'C')
         
-        # DYNAMIC SUBTITLE
         self.set_font('Arial', '', 9)
         self.set_text_color(200, 200, 200)
         self.cell(0, 8, clean_text(self.subtitle_text), 0, 1, 'C')
@@ -209,10 +204,13 @@ class PDF(FPDF):
         self.reset_state()
         self.check_page_break(80)
         
+        # Colors
         if mode == 'sell':
             head_fill, badge_fill = (231, 76, 60), (192, 57, 43)
         elif mode == 'open':
             head_fill, badge_fill = (46, 204, 113), (39, 174, 96)
+        elif mode == 'watch':
+            head_fill, badge_fill = (243, 156, 18), (211, 84, 0) # Orange for Watchlist
         else:
             head_fill, badge_fill = (52, 152, 219), (41, 128, 185)
 
@@ -270,44 +268,6 @@ class PDF(FPDF):
         self.ln(5)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(5)
-
-    def watchlist_item(self, title, text_lines):
-        """Draws a single watchlist item card."""
-        self.reset_state()
-        
-        # Calculate dynamic height
-        self.set_font('Arial', '', 9)
-        total_text_height = 0
-        for line in text_lines:
-            lines = len(self.multi_cell(180, 5, clean_text(line), split_only=True))
-            total_text_height += (lines * 5)
-            
-        h_needed = total_text_height + 15 # Padding + Header
-        self.check_page_break(h_needed)
-        
-        start_y = self.get_y()
-        self.set_fill_color(255, 248, 240)
-        self.set_draw_color(230, 126, 34)
-        self.set_line_width(0.2)
-        self.rect(10, start_y, 190, h_needed, 'F')
-        
-        # Title
-        self.set_xy(15, start_y + 4)
-        self.set_font('Arial', 'B', 10)
-        self.set_text_color(44, 62, 80)
-        self.cell(0, 5, clean_text(title), 0, 1)
-        
-        # Lines
-        self.set_font('Arial', '', 9)
-        self.set_text_color(0, 0, 0)
-        curr_y = start_y + 10
-        
-        for line in text_lines:
-            self.set_xy(15, curr_y)
-            self.multi_cell(180, 5, clean_text(line), align='L')
-            curr_y = self.get_y()
-            
-        self.set_y(curr_y + 2)
 
     def disclaimer_box(self, title, text):
         self.reset_state()
@@ -520,31 +480,44 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Reduce/Exit Recommendations", new_page=True)
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
-    # 6. WATCHLIST (Robust)
+    # 6. WATCHLIST (Robust & Formatted)
     wl_container = soup.find(id='tab-watchlist') or soup.find(class_='watchlist') or soup.find(id='watch')
-    
     if not wl_container:
         wl_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Watchlist' in safe_get_text(t))
         if wl_header: wl_container = wl_header.find_parent('div')
 
     if wl_container:
         pdf.section_header("Watchlist - Additional Opportunities", new_page=True)
-        pdf.reset_state()
         
-        # Strategy A: Specific items
-        items = wl_container.find_all(class_=['watchlist-item', 'card'])
+        # Grab all children divs that look like cards
+        items = [d for d in wl_container.find_all('div', recursive=True) if d.find(['h3', 'h4'])]
         
-        # Strategy B: Generic divs with headers
-        if not items:
-            potential_items = wl_container.find_all('div', recursive=True)
-            items = [d for d in potential_items if d.find(['h3', 'h4', 'strong'])]
-
         for item in items:
-            h = item.find(['h3', 'h4', 'strong'])
-            title = safe_get_text(h) if h else "Watchlist Item"
+            header = item.find(['h3', 'h4'])
+            header_text = safe_get_text(header)
             
-            p_lines = [safe_get_text(p) for p in item.find_all('p')]
-            pdf.watchlist_item(title, p_lines)
+            # Parse Ticker - Name
+            if "-" in header_text:
+                parts = header_text.split("-", 1)
+                ticker = parts[0].strip()
+                name = parts[1].strip()
+            else:
+                ticker = header_text
+                name = ""
+                
+            # Parse Content
+            details = []
+            table = {}
+            for p in item.find_all('p'):
+                txt = safe_get_text(p)
+                if ':' in txt and len(txt) < 80:
+                    key, val = txt.split(':', 1)
+                    table[key.strip()] = val.strip()
+                else:
+                    details.append(txt)
+            
+            # Use Full Card Layout for Watchlist
+            pdf.content_card(ticker, name, "Watchlist", details, table, "", "", mode='watch')
 
     # 7. NOTES
     notes_head = soup.find(lambda t: t.name in ['h2','h3'] and 'Notes' in safe_get_text(t))
