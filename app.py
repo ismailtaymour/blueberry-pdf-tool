@@ -491,7 +491,7 @@ def parse_and_generate_pdf(html_content):
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
     # 6. WATCHLIST
-    wl_section = soup.find(class_='watchlist') or soup.find(id='watch')
+    wl_section = soup.find(class_='watchlist') or soup.find(id='tab-watchlist')
     if wl_section:
         pdf.section_header("Watchlist - Additional Opportunities", new_page=True)
         pdf.reset_state()
