@@ -8,14 +8,19 @@ import math
 # --- 1. CLEANING FUNCTIONS ---
 def clean_text(text):
     if not text: return ""
+    # Normalize whitespace
+    text = text.replace('\n', ' ').replace('\t', ' ').replace('\r', ' ')
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # Replace smart quotes and symbols
     replacements = {
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
-        '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' ',
-        '\t': ' '
+        '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' '
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-    return text.encode('latin-1', 'ignore').decode('latin-1').strip()
+        
+    return text.encode('latin-1', 'ignore').decode('latin-1')
 
 def safe_get_text(element):
     if not element: return ""
@@ -56,10 +61,12 @@ class PDF(FPDF):
             self.add_page()
 
     def reset_state(self):
-        """Force reset margins/cursor to defaults."""
+        """Force reset margins/cursor/font to defaults."""
         self.set_left_margin(10)
         self.set_right_margin(10)
         self.set_x(10)
+        self.set_text_color(0, 0, 0)
+        self.set_font('Arial', '', 9)
 
     def section_header(self, title, new_page=False):
         self.reset_state()
@@ -104,20 +111,13 @@ class PDF(FPDF):
         self.set_line_width(0.2)
 
     def draw_parameter_grid(self, params):
-        """
-        Draws trade parameters as a 3-column grid instead of a single table row.
-        This prevents narrow columns and vertical text wrapping.
-        """
         if not params: return
-
         self.ln(2)
         
-        # Configuration
         col_count = 3
-        col_width = 63  # 190mm / 3 columns
-        row_height = 16 # Height for Label + Value
+        col_width = 63  
+        row_height = 16 
         
-        # Layout calculation
         total_items = len(params)
         rows_needed = math.ceil(total_items / col_count)
         total_height = (rows_needed * row_height) + 5
@@ -130,52 +130,44 @@ class PDF(FPDF):
         items = list(params.items())
         
         for i, (key, val) in enumerate(items):
-            # Calculate grid position
             col_idx = i % col_count
             row_idx = i // col_count
             
             curr_x = start_x + (col_idx * col_width)
             curr_y = start_y + (row_idx * row_height)
             
-            # Draw Box Background
             self.set_xy(curr_x, curr_y)
             self.set_fill_color(250, 250, 250)
             self.set_draw_color(220, 220, 220)
             self.set_line_width(0.1)
             self.rect(curr_x, curr_y, col_width, row_height, 'DF')
             
-            # Draw Label (Top, Smaller, Gray)
+            # Label
             self.set_xy(curr_x, curr_y + 3)
             self.set_font('Arial', '', 8)
             self.set_text_color(100, 100, 100)
-            # Temporarily restrict margin to this cell for centering
             original_l_margin = self.l_margin
             self.set_left_margin(curr_x)
             self.cell(col_width, 4, clean_text(key), 0, 1, 'C')
             
-            # Draw Value (Bottom, Larger, Black)
+            # Value
             self.set_xy(curr_x, curr_y + 8)
             self.set_font('Arial', 'B', 10)
             self.set_text_color(44, 62, 80)
             
-            # Clean value text
             val_text = clean_text(str(val))
-            # Use multi_cell if value is long, otherwise cell
             if self.get_string_width(val_text) > (col_width - 4):
-                self.set_font('Arial', 'B', 9) # Shrink slightly
+                self.set_font('Arial', 'B', 9) 
                 self.multi_cell(col_width, 4, val_text, 0, 'C')
             else:
                 self.cell(col_width, 5, val_text, 0, 1, 'C')
                 
-            # Reset Margin
             self.set_left_margin(original_l_margin)
 
-        # Move cursor below grid
         self.set_y(start_y + (rows_needed * row_height) + 5)
-        self.set_x(10) # Reset X
+        self.set_x(10)
 
     def table_row(self, texts, widths, fills, aligns):
-        """Standard table row for Index/Watchlist"""
         line_height = 5
         font_size = 9
         self.set_font('Arial', '', font_size)
@@ -224,7 +216,7 @@ class PDF(FPDF):
         else:
             head_fill, badge_fill = (52, 152, 219), (41, 128, 185)
 
-        # Header Row
+        # Header
         self.set_fill_color(*head_fill)
         self.set_text_color(255, 255, 255)
         self.set_font('Arial', 'B', 12)
@@ -240,7 +232,7 @@ class PDF(FPDF):
         self.cell(65, 8, clean_text(setup_type), 0, 1, 'C', fill=True)
         self.ln(2)
 
-        # Details Block
+        # Details
         self.set_text_color(0, 0, 0)
         self.set_font('Arial', '', 9)
         self.reset_state()
@@ -248,11 +240,11 @@ class PDF(FPDF):
             self.multi_cell(190, 5, clean_text(line), align='L') 
             self.ln(1)
 
-        # NEW GRID LAYOUT for Parameters (Fixes vertical text issue)
+        # GRID Layout
         if table_data:
             self.draw_parameter_grid(table_data)
 
-        # Rationale Box
+        # Rationale
         if rationale:
             self.reset_state()
             self.set_fill_color(245, 248, 250)
@@ -266,7 +258,7 @@ class PDF(FPDF):
             self.multi_cell(186, 5, f"Rationale: {clean_text(rationale)}", align='L')
             self.set_y(self.get_y() + 2)
         
-        # Confidence Level
+        # Confidence
         if confidence:
             self.ln(2)
             self.set_font('Arial', 'B', 9)
@@ -278,6 +270,32 @@ class PDF(FPDF):
         self.ln(5)
         self.line(10, self.get_y(), 200, self.get_y())
         self.ln(5)
+
+    def watchlist_item(self, title, text_lines):
+        self.reset_state()
+        self.check_page_break(35)
+        
+        self.set_fill_color(255, 248, 240)
+        self.set_draw_color(230, 126, 34)
+        self.set_line_width(0.2)
+        
+        start_y = self.get_y()
+        # Estimate height
+        h_needed = 12 + (len(text_lines) * 5)
+        self.rect(10, start_y, 190, h_needed, 'F')
+        
+        self.set_xy(15, start_y + 4)
+        self.set_font('Arial', 'B', 10)
+        self.set_text_color(44, 62, 80)
+        self.cell(0, 5, clean_text(title), 0, 1)
+        
+        self.set_font('Arial', '', 9)
+        self.set_text_color(0, 0, 0)
+        for line in text_lines:
+            self.set_x(15)
+            self.cell(0, 5, clean_text(line), 0, 1)
+        
+        self.ln(2)
 
     def disclaimer_box(self, title, text):
         self.reset_state()
@@ -307,7 +325,7 @@ class PDF(FPDF):
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # 1. Extract Dynamic Subtitle
+    # 1. Subtitle Extraction
     date_div = soup.find('div', class_='date')
     if date_div:
         subtitle = safe_get_text(date_div)
@@ -353,7 +371,6 @@ def parse_and_generate_pdf(html_content):
         
         for i in range(0, len(rows), 2):
             l1, v1, l2, v2 = "", "", "", ""
-            
             if rows[i].find(class_='metric-label'):
                 l1 = safe_get_text(rows[i].find(class_='metric-label'))
                 v1 = safe_get_text(rows[i].find(class_='metric-value'))
@@ -442,7 +459,7 @@ def parse_and_generate_pdf(html_content):
             cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode})
             
     else:
-        # Tabbed fallback
+        # Generic fallback
         tabs = soup.find_all(class_='tab-content')
         for tab in tabs:
             tab_id = str(tab.get('id', '')).lower()
@@ -465,7 +482,7 @@ def parse_and_generate_pdf(html_content):
                         key, val = txt.split(':', 1)
                         key = key.strip().lower()
                         val = val.strip()
-                        if any(k in key for k in ['entry', 'target', 'stop', 'r:r', 'current', 'action', 'decision']):
+                        if any(k in key for k in ['entry', 'target', 'stop', 'r:r', 'current']):
                             table[key.title()] = val
                         elif 'setup' in key:
                             setup = val
@@ -490,26 +507,31 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Reduce/Exit Recommendations", new_page=True)
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
-    # 6. WATCHLIST
-    wl_section = soup.find(class_='watchlist') or soup.find(id='tab-watchlist')
-    if wl_section:
+    # 6. WATCHLIST (Robust)
+    wl_container = soup.find(id='tab-watchlist') or soup.find(class_='watchlist') or soup.find(id='watch')
+    
+    if not wl_container:
+        wl_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Watchlist' in safe_get_text(t))
+        if wl_header: wl_container = wl_header.find_parent('div')
+
+    if wl_container:
         pdf.section_header("Watchlist - Additional Opportunities", new_page=True)
         pdf.reset_state()
-        items = wl_section.find_all(class_='watchlist-item') or wl_section.find_all(class_='card')
+        
+        # Strategy A: Specific items
+        items = wl_container.find_all(class_=['watchlist-item', 'card'])
+        
+        # Strategy B: Generic divs with headers
+        if not items:
+            potential_items = wl_container.find_all('div', recursive=True)
+            items = [d for d in potential_items if d.find(['h3', 'h4', 'strong'])]
+
         for item in items:
-            pdf.check_page_break(35)
-            pdf.set_fill_color(255, 248, 240)
-            pdf.rect(10, pdf.get_y(), 190, 30, 'F')
-            pdf.set_xy(15, pdf.get_y() + 5)
-            h = item.find(['h3', 'h4'])
-            pdf.set_font('Arial', 'B', 10)
-            pdf.cell(0, 5, clean_text(safe_get_text(h)), 0, 1)
-            pdf.set_font('Arial', '', 9)
-            pdf.set_x(15)
-            for p in item.find_all('p'):
-                pdf.set_x(15)
-                pdf.cell(0, 5, clean_text(safe_get_text(p)), 0, 1)
-            pdf.ln(5)
+            h = item.find(['h3', 'h4', 'strong'])
+            title = safe_get_text(h) if h else "Watchlist Item"
+            
+            p_lines = [safe_get_text(p) for p in item.find_all('p')]
+            pdf.watchlist_item(title, p_lines)
 
     # 7. NOTES
     notes_head = soup.find(lambda t: t.name in ['h2','h3'] and 'Notes' in safe_get_text(t))
