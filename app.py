@@ -23,7 +23,7 @@ def safe_get_text(element):
 
 # --- 2. PDF ENGINE ---
 class PDF(FPDF):
-    def __init__(self, subtitle_text):
+    def __init__(self, subtitle_text=""):
         super().__init__()
         self.subtitle_text = subtitle_text
 
@@ -39,7 +39,7 @@ class PDF(FPDF):
         self.set_xy(10, 22)
         self.cell(0, 5, clean_text('AI-Generated Technical Analysis | For Informational Purposes Only'), 0, 1, 'C')
         
-        # DYNAMIC SUBTITLE (Date/Level)
+        # DYNAMIC SUBTITLE
         self.set_font('Arial', '', 9)
         self.set_text_color(200, 200, 200)
         self.cell(0, 8, clean_text(self.subtitle_text), 0, 1, 'C')
@@ -56,14 +56,13 @@ class PDF(FPDF):
             self.add_page()
 
     def reset_state(self):
-        """Force reset margins/cursor to defaults to prevent layout bugs."""
+        """Force reset margins/cursor to defaults."""
         self.set_left_margin(10)
         self.set_right_margin(10)
         self.set_x(10)
 
     def section_header(self, title, new_page=False):
         self.reset_state()
-        
         if new_page:
             self.add_page()
         elif self.get_y() > 250: 
@@ -104,56 +103,115 @@ class PDF(FPDF):
         self.set_y(start_y + h_needed + 5)
         self.set_line_width(0.2)
 
+    def draw_parameter_grid(self, params):
+        """
+        Draws trade parameters as a 3-column grid instead of a single table row.
+        This prevents narrow columns and vertical text wrapping.
+        """
+        if not params: return
+
+        self.ln(2)
+        
+        # Configuration
+        col_count = 3
+        col_width = 63  # 190mm / 3 columns
+        row_height = 16 # Height for Label + Value
+        
+        # Layout calculation
+        total_items = len(params)
+        rows_needed = math.ceil(total_items / col_count)
+        total_height = (rows_needed * row_height) + 5
+        
+        self.check_page_break(total_height)
+        
+        start_x = 10
+        start_y = self.get_y()
+        
+        items = list(params.items())
+        
+        for i, (key, val) in enumerate(items):
+            # Calculate grid position
+            col_idx = i % col_count
+            row_idx = i // col_count
+            
+            curr_x = start_x + (col_idx * col_width)
+            curr_y = start_y + (row_idx * row_height)
+            
+            # Draw Box Background
+            self.set_xy(curr_x, curr_y)
+            self.set_fill_color(250, 250, 250)
+            self.set_draw_color(220, 220, 220)
+            self.set_line_width(0.1)
+            self.rect(curr_x, curr_y, col_width, row_height, 'DF')
+            
+            # Draw Label (Top, Smaller, Gray)
+            self.set_xy(curr_x, curr_y + 3)
+            self.set_font('Arial', '', 8)
+            self.set_text_color(100, 100, 100)
+            # Temporarily restrict margin to this cell for centering
+            original_l_margin = self.l_margin
+            self.set_left_margin(curr_x)
+            self.cell(col_width, 4, clean_text(key), 0, 1, 'C')
+            
+            # Draw Value (Bottom, Larger, Black)
+            self.set_xy(curr_x, curr_y + 8)
+            self.set_font('Arial', 'B', 10)
+            self.set_text_color(44, 62, 80)
+            
+            # Clean value text
+            val_text = clean_text(str(val))
+            # Use multi_cell if value is long, otherwise cell
+            if self.get_string_width(val_text) > (col_width - 4):
+                self.set_font('Arial', 'B', 9) # Shrink slightly
+                self.multi_cell(col_width, 4, val_text, 0, 'C')
+            else:
+                self.cell(col_width, 5, val_text, 0, 1, 'C')
+                
+            # Reset Margin
+            self.set_left_margin(original_l_margin)
+
+        # Move cursor below grid
+        self.set_y(start_y + (rows_needed * row_height) + 5)
+        self.set_x(10) # Reset X
+
     def table_row(self, texts, widths, fills, aligns):
-        """
-        Draws a table row using explicit X/Y coordinates (Stateless).
-        This prevents margin corruption bugs.
-        """
+        """Standard table row for Index/Watchlist"""
         line_height = 5
         font_size = 9
         self.set_font('Arial', '', font_size)
         
-        # 1. Calculate max height required for this row
         cell_heights = []
         for i, text in enumerate(texts):
             w = widths[i]
             lines = len(self.multi_cell(w - 2, line_height, text, split_only=True))
-            h = max(lines * line_height, 8) # Enforce min height
+            h = max(lines * line_height, 8) 
             cell_heights.append(h)
             
         row_height = max(cell_heights)
         self.check_page_break(row_height)
         
-        # 2. Draw Cells using absolute positioning
-        start_y = self.get_y()
-        current_x = 10 # Start at left page margin
+        y_start = self.get_y()
+        x_start = 10 
+        original_l_margin = self.l_margin
         
         for i, text in enumerate(texts):
             w = widths[i]
-            
-            # Draw Cell Background/Border
-            self.set_xy(current_x, start_y)
+            self.set_xy(x_start, y_start)
             if fills[i]:
                 self.set_fill_color(250, 250, 250)
-                self.rect(current_x, start_y, w, row_height, 'FD')
+                self.rect(x_start, y_start, w, row_height, 'FD')
             else:
-                self.rect(current_x, start_y, w, row_height, 'D')
+                self.rect(x_start, y_start, w, row_height, 'D')
                 
-            # Draw Text inside the cell
-            self.set_xy(current_x, start_y + 1.5)
-            
-            # Temporarily set left margin to current column start to force wrapping inside cell
-            original_l_margin = self.l_margin
-            self.set_left_margin(current_x)
+            self.set_left_margin(x_start) 
+            self.set_xy(x_start, y_start + 1.5)
             self.multi_cell(w, line_height, text, 0, aligns[i])
-            self.set_left_margin(original_l_margin) # IMMMEDIATE RESET
             
-            # Move X pointer to the next column
-            current_x += w
+            x_start += w
             
-        # 3. Move Y pointer down by the height of the row & Reset Global State
-        self.set_xy(10, start_y + row_height)
-        self.set_left_margin(10) # Redundant safety reset
+        self.set_left_margin(original_l_margin)
+        self.set_x(10)
+        self.set_y(y_start + row_height)
 
     def content_card(self, ticker, name, setup_type, details, table_data, rationale, confidence, mode='buy'):
         self.reset_state()
@@ -190,27 +248,9 @@ class PDF(FPDF):
             self.multi_cell(190, 5, clean_text(line), align='L') 
             self.ln(1)
 
-        # Data Table
+        # NEW GRID LAYOUT for Parameters (Fixes vertical text issue)
         if table_data:
-            self.ln(2)
-            self.set_draw_color(200, 200, 200)
-            cols = len(table_data)
-            if cols > 0:
-                col_width = 190 / cols
-                widths = [col_width] * cols
-                
-                # Headers
-                self.set_font('Arial', 'B', 8)
-                self.set_fill_color(245, 245, 245)
-                self.set_text_color(0,0,0)
-                headers = [clean_text(h) for h in table_data.keys()]
-                self.table_row(headers, widths, [True]*cols, ['C']*cols)
-                
-                # Values
-                self.set_font('Arial', '', 9)
-                values = [clean_text(str(v)) for v in table_data.values()]
-                self.table_row(values, widths, [False]*cols, ['C']*cols)
-            self.ln(5)
+            self.draw_parameter_grid(table_data)
 
         # Rationale Box
         if rationale:
@@ -263,37 +303,30 @@ class PDF(FPDF):
         self.multi_cell(180, 4, clean_text(text), align='L')
         self.ln(5)
 
-# --- 3. ROBUST HTML PARSER ---
+# --- 3. PARSER ---
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # --- EXTRACT DATE & HEADER INFO ---
-    # Try finding the specific 'date' div (Streamlined style)
+    # 1. Extract Dynamic Subtitle
     date_div = soup.find('div', class_='date')
     if date_div:
-        subtitle_text = safe_get_text(date_div)
+        subtitle = safe_get_text(date_div)
     else:
-        # Fallback to 'header' div paragraph (Old style)
-        header_div = soup.find('div', class_='header')
-        if header_div and header_div.find('p'):
-            subtitle_text = safe_get_text(header_div.find('p'))
-        else:
-            subtitle_text = "Report Generated: Unknown Date"
+        header_p = soup.find('div', class_='header')
+        subtitle = safe_get_text(header_p.find('p')) if (header_p and header_p.find('p')) else "Market Report"
 
-    # Initialize PDF with Dynamic Subtitle
-    pdf = PDF(subtitle_text)
+    pdf = PDF(subtitle)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # 1. ALERT BOX
+    # 2. ALERT BOX
     alert_tag = soup.find(class_='alert-box')
     if not alert_tag:
         alert_text = soup.find(string=re.compile("EXTREME CAUTION"))
-        if alert_text:
-            if isinstance(alert_text, NavigableString):
-                alert_tag = alert_text.parent
-                if alert_tag.name in ['b', 'strong', 'h3', 'h4', 'span']:
-                    alert_tag = alert_tag.parent
+        if alert_text and isinstance(alert_text, NavigableString):
+            parent = alert_text.parent
+            if parent.name in ['b', 'strong', 'h3', 'h4']: parent = parent.parent
+            alert_tag = parent
 
     if alert_tag and not isinstance(alert_tag, NavigableString):
         head = alert_tag.find(['h3', 'h4', 'strong'])
@@ -302,15 +335,13 @@ def parse_and_generate_pdf(html_content):
         text = text.replace(title, "").strip()
         pdf.alert_box(title, text)
 
-    # 2. INDEX STATUS
-    idx_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Index' in safe_get_text(t) and ('Status' in safe_get_text(t) or 'Analysis' in safe_get_text(t)))
+    # 3. INDEX STATUS
+    idx_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Index' in safe_get_text(t))
     idx_anchor = soup.find(string=re.compile(r"(Current Level|Level:)"))
     
     idx_card = None
-    if idx_header:
-        idx_card = idx_header.find_next(class_=['index-card', 'card'])
-    elif idx_anchor:
-        idx_card = idx_anchor.find_parent(class_=['index-card', 'card']) or idx_anchor.find_parent('div').find_parent('div')
+    if idx_header: idx_card = idx_header.find_next(class_=['index-card', 'card'])
+    elif idx_anchor: idx_card = idx_anchor.find_parent(class_=['index-card', 'card'])
 
     if idx_card:
         pdf.section_header("Index Technical Status", new_page=False)
@@ -352,11 +383,11 @@ def parse_and_generate_pdf(html_content):
             
             pdf.table_row(texts, widths, fills, aligns)
 
-    # 3. MARKET ASSESSMENT
+    # 4. MARKET ASSESSMENT
     assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend' in safe_get_text(t))
     if assess_header:
         pdf.section_header("Market Trend Assessment", new_page=False)
-        content = assess_header.find_next_sibling('div') or assess_header.parent.find(class_='market-assessment') or assess_header.parent.find(class_='card')
+        content = assess_header.find_next_sibling('div') or assess_header.parent.find(class_='market-assessment')
         
         if content:
             pdf.reset_state()
@@ -373,32 +404,24 @@ def parse_and_generate_pdf(html_content):
                     pdf.multi_cell(190, 5, clean_text(safe_get_text(tag)), align='L')
                     pdf.ln(2)
 
-    # 4. CARD EXTRACTION
+    # 5. CARD EXTRACTION
     cards_data = []
     
     if soup.find(class_='setup-card'):
         for card in soup.find_all(class_='setup-card'):
-            ticker_el = card.find(class_='ticker')
-            ticker = safe_get_text(ticker_el) if ticker_el else "STOCK"
-            
-            name_el = card.find(class_='company-name')
-            name = safe_get_text(name_el) if name_el else ""
-            
-            setup_el = card.find(class_='setup-type')
-            setup = safe_get_text(setup_el) if setup_el else "Setup"
+            ticker = safe_get_text(card.find(class_='ticker')) or "STOCK"
+            name = safe_get_text(card.find(class_='company-name')) or ""
+            setup = safe_get_text(card.find(class_='setup-type')) or "Setup"
             
             mode = 'buy'
-            if setup_el and ('exit' in setup.lower() or 'reduce' in setup.lower() or 'sell' in setup.lower()): 
-                mode = 'sell'
-            if setup_el and ('distribution' in setup.lower()): 
-                mode = 'sell'
+            if 'exit' in setup.lower() or 'reduce' in setup.lower() or 'distribution' in setup.lower(): mode = 'sell'
             
             curr = card.parent
             for _ in range(4):
                 if curr:
                     cid = str(curr.get('id', '')).lower()
                     if 'open' in cid or 'pos' in cid: mode = 'open'
-                    elif 'reduce' in cid or 'sell' in cid or 'distrib' in cid: mode = 'sell'
+                    elif 'reduce' in cid or 'sell' in cid: mode = 'sell'
                     curr = curr.parent
                 else: break
 
@@ -410,23 +433,16 @@ def parse_and_generate_pdf(html_content):
                     if lbl: table[lbl] = val
             
             details = []
-            details_div = card.find(class_='technical-details')
-            if details_div:
-                details = [safe_get_text(p) for p in details_div.find_all('p')]
+            if card.find(class_='technical-details'):
+                details = [safe_get_text(p) for p in card.find(class_='technical-details').find_all('p')]
             
-            rationale = ""
-            rat_div = card.find(class_='rationale')
-            if rat_div:
-                rationale = safe_get_text(rat_div).replace("Rationale:", "").strip()
-            
-            conf = ""
-            conf_div = card.find(class_='confidence')
-            if conf_div:
-                conf = safe_get_text(conf_div)
+            rationale = safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip()
+            conf = safe_get_text(card.find(class_='confidence'))
             
             cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode})
             
     else:
+        # Tabbed fallback
         tabs = soup.find_all(class_='tab-content')
         for tab in tabs:
             tab_id = str(tab.get('id', '')).lower()
@@ -435,22 +451,21 @@ def parse_and_generate_pdf(html_content):
             elif 'open' in tab_id: mode = 'open'
             elif 'watch' in tab_id or 'index' in tab_id or 'market' in tab_id or 'notes' in tab_id: continue
             
-            cards = tab.find_all(class_='card')
-            for card in cards:
+            for card in tab.find_all(class_='card'):
                 header = card.find('h3')
                 if not header: continue
                 parts = safe_get_text(header).split('-', 1)
                 ticker = parts[0].strip()
                 name = parts[1].strip() if len(parts) > 1 else ""
                 
-                details, table, setup = [], {}, "Technical Setup"
+                details, table, setup = [], {}, "Setup"
                 for p in card.find_all('p'):
                     txt = safe_get_text(p)
                     if ':' in txt and len(txt) < 120:
                         key, val = txt.split(':', 1)
                         key = key.strip().lower()
                         val = val.strip()
-                        if any(k in key for k in ['entry', 'target', 'stop', 'r:r', 'current', 'action', 'decision', 'gain', 'loss']):
+                        if any(k in key for k in ['entry', 'target', 'stop', 'r:r', 'current', 'action', 'decision']):
                             table[key.title()] = val
                         elif 'setup' in key:
                             setup = val
@@ -460,7 +475,7 @@ def parse_and_generate_pdf(html_content):
                 
                 cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': "", 'c': "", 'm': mode})
 
-    # 5. RENDER CARDS
+    # Render Groups
     opens = [c for c in cards_data if c['m'] == 'open']
     buys = [c for c in cards_data if c['m'] == 'buy']
     sells = [c for c in cards_data if c['m'] == 'sell']
@@ -513,9 +528,7 @@ def parse_and_generate_pdf(html_content):
     # 8. DISCLAIMER
     disc = soup.find(class_='disclaimer')
     if disc:
-        if isinstance(disc, NavigableString):
-            disc = disc.parent
-        
+        if isinstance(disc, NavigableString): disc = disc.parent
         title_tag = disc.find(['h3', 'h4'])
         title = safe_get_text(title_tag) if title_tag else "Important Disclaimer"
         text = safe_get_text(disc).replace(title, "").strip()
@@ -523,7 +536,7 @@ def parse_and_generate_pdf(html_content):
 
     return pdf
 
-# --- 4. STREAMLIT INTERFACE ---
+# --- 4. STREAMLIT ---
 st.set_page_config(page_title="BlueberryAI Formatter", layout="centered")
 st.title("📄 BlueberryAI PDF Generator")
 st.write("Upload your HTML report to generate the formatted PDF.")
