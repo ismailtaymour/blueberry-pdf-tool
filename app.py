@@ -61,7 +61,7 @@ class PDF(FPDF):
             self.add_page()
 
     def reset_state(self):
-        """Force reset margins/cursor/font to defaults."""
+        """Force reset margins/cursor to defaults."""
         self.set_left_margin(10)
         self.set_right_margin(10)
         self.set_x(10)
@@ -272,30 +272,42 @@ class PDF(FPDF):
         self.ln(5)
 
     def watchlist_item(self, title, text_lines):
+        """Draws a single watchlist item card."""
         self.reset_state()
-        self.check_page_break(35)
         
+        # Calculate dynamic height
+        self.set_font('Arial', '', 9)
+        total_text_height = 0
+        for line in text_lines:
+            lines = len(self.multi_cell(180, 5, clean_text(line), split_only=True))
+            total_text_height += (lines * 5)
+            
+        h_needed = total_text_height + 15 # Padding + Header
+        self.check_page_break(h_needed)
+        
+        start_y = self.get_y()
         self.set_fill_color(255, 248, 240)
         self.set_draw_color(230, 126, 34)
         self.set_line_width(0.2)
-        
-        start_y = self.get_y()
-        # Estimate height
-        h_needed = 12 + (len(text_lines) * 5)
         self.rect(10, start_y, 190, h_needed, 'F')
         
+        # Title
         self.set_xy(15, start_y + 4)
         self.set_font('Arial', 'B', 10)
         self.set_text_color(44, 62, 80)
         self.cell(0, 5, clean_text(title), 0, 1)
         
+        # Lines
         self.set_font('Arial', '', 9)
         self.set_text_color(0, 0, 0)
-        for line in text_lines:
-            self.set_x(15)
-            self.cell(0, 5, clean_text(line), 0, 1)
+        curr_y = start_y + 10
         
-        self.ln(2)
+        for line in text_lines:
+            self.set_xy(15, curr_y)
+            self.multi_cell(180, 5, clean_text(line), align='L')
+            curr_y = self.get_y()
+            
+        self.set_y(curr_y + 2)
 
     def disclaimer_box(self, title, text):
         self.reset_state()
@@ -371,6 +383,7 @@ def parse_and_generate_pdf(html_content):
         
         for i in range(0, len(rows), 2):
             l1, v1, l2, v2 = "", "", "", ""
+            
             if rows[i].find(class_='metric-label'):
                 l1 = safe_get_text(rows[i].find(class_='metric-label'))
                 v1 = safe_get_text(rows[i].find(class_='metric-value'))
