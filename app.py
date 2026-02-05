@@ -56,7 +56,6 @@ class PDF(FPDF):
             self.add_page()
 
     def reset_state(self):
-        """Force reset margins/cursor to defaults."""
         self.set_left_margin(10)
         self.set_right_margin(10)
         self.set_x(10)
@@ -137,7 +136,6 @@ class PDF(FPDF):
             self.set_line_width(0.1)
             self.rect(curr_x, curr_y, col_width, row_height, 'DF')
             
-            # Label
             self.set_xy(curr_x, curr_y + 3)
             self.set_font('Arial', '', 8)
             self.set_text_color(100, 100, 100)
@@ -145,7 +143,6 @@ class PDF(FPDF):
             self.set_left_margin(curr_x)
             self.cell(col_width, 4, clean_text(key), 0, 1, 'C')
             
-            # Value
             self.set_xy(curr_x, curr_y + 8)
             self.set_font('Arial', 'B', 10)
             self.set_text_color(44, 62, 80)
@@ -204,13 +201,12 @@ class PDF(FPDF):
         self.reset_state()
         self.check_page_break(80)
         
-        # Colors
         if mode == 'sell':
             head_fill, badge_fill = (231, 76, 60), (192, 57, 43)
         elif mode == 'open':
             head_fill, badge_fill = (46, 204, 113), (39, 174, 96)
         elif mode == 'watch':
-            head_fill, badge_fill = (243, 156, 18), (211, 84, 0) # Orange for Watchlist
+            head_fill, badge_fill = (243, 156, 18), (211, 84, 0)
         else:
             head_fill, badge_fill = (52, 152, 219), (41, 128, 185)
 
@@ -238,11 +234,9 @@ class PDF(FPDF):
             self.multi_cell(190, 5, clean_text(line), align='L') 
             self.ln(1)
 
-        # GRID Layout
         if table_data:
             self.draw_parameter_grid(table_data)
 
-        # Rationale
         if rationale:
             self.reset_state()
             self.set_fill_color(245, 248, 250)
@@ -256,7 +250,6 @@ class PDF(FPDF):
             self.multi_cell(186, 5, f"Rationale: {clean_text(rationale)}", align='L')
             self.set_y(self.get_y() + 2)
         
-        # Confidence
         if confidence:
             self.ln(2)
             self.set_font('Arial', 'B', 9)
@@ -297,7 +290,6 @@ class PDF(FPDF):
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # 1. Subtitle Extraction
     date_div = soup.find('div', class_='date')
     if date_div:
         subtitle = safe_get_text(date_div)
@@ -309,14 +301,16 @@ def parse_and_generate_pdf(html_content):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # 2. ALERT BOX
+    # 1. ALERT BOX
     alert_tag = soup.find(class_='alert-box')
     if not alert_tag:
         alert_text = soup.find(string=re.compile("EXTREME CAUTION"))
         if alert_text and isinstance(alert_text, NavigableString):
             parent = alert_text.parent
-            if parent.name in ['b', 'strong', 'h3', 'h4']: parent = parent.parent
-            alert_tag = parent
+            if parent.name in ['b', 'strong', 'h3', 'h4', 'span']:
+                alert_tag = parent.parent
+            else:
+                alert_tag = parent
 
     if alert_tag and not isinstance(alert_tag, NavigableString):
         head = alert_tag.find(['h3', 'h4', 'strong'])
@@ -325,7 +319,7 @@ def parse_and_generate_pdf(html_content):
         text = text.replace(title, "").strip()
         pdf.alert_box(title, text)
 
-    # 3. INDEX STATUS
+    # 2. INDEX STATUS
     idx_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Index' in safe_get_text(t))
     idx_anchor = soup.find(string=re.compile(r"(Current Level|Level:)"))
     
@@ -343,7 +337,6 @@ def parse_and_generate_pdf(html_content):
         
         for i in range(0, len(rows), 2):
             l1, v1, l2, v2 = "", "", "", ""
-            
             if rows[i].find(class_='metric-label'):
                 l1 = safe_get_text(rows[i].find(class_='metric-label'))
                 v1 = safe_get_text(rows[i].find(class_='metric-value'))
@@ -373,7 +366,7 @@ def parse_and_generate_pdf(html_content):
             
             pdf.table_row(texts, widths, fills, aligns)
 
-    # 4. MARKET ASSESSMENT
+    # 3. MARKET ASSESSMENT
     assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend' in safe_get_text(t))
     if assess_header:
         pdf.section_header("Market Trend Assessment", new_page=False)
@@ -394,76 +387,92 @@ def parse_and_generate_pdf(html_content):
                     pdf.multi_cell(190, 5, clean_text(safe_get_text(tag)), align='L')
                     pdf.ln(2)
 
-    # 5. CARD EXTRACTION
+    # 4. CARD EXTRACTION
     cards_data = []
     
-    if soup.find(class_='setup-card'):
-        for card in soup.find_all(class_='setup-card'):
-            ticker = safe_get_text(card.find(class_='ticker')) or "STOCK"
-            name = safe_get_text(card.find(class_='company-name')) or ""
-            setup = safe_get_text(card.find(class_='setup-type')) or "Setup"
-            
-            mode = 'buy'
-            if 'exit' in setup.lower() or 'reduce' in setup.lower() or 'distribution' in setup.lower(): mode = 'sell'
-            
-            curr = card.parent
-            for _ in range(4):
-                if curr:
-                    cid = str(curr.get('id', '')).lower()
-                    if 'open' in cid or 'pos' in cid: mode = 'open'
-                    elif 'reduce' in cid or 'sell' in cid: mode = 'sell'
-                    curr = curr.parent
-                else: break
+    # Combined strategy: Look for explicit classes OR generic structure in known tabs
+    all_cards = soup.find_all(class_=['setup-card', 'card'])
+    
+    for card in all_cards:
+        # Avoid processing Index/Market/Watchlist items in main loop
+        if card == idx_card: continue
+        
+        # Check if inside Watchlist (handle separately)
+        is_watch = False
+        curr = card.parent
+        for _ in range(4):
+            if curr:
+                cid = str(curr.get('id', '')).lower()
+                cclass = str(curr.get('class', '')).lower()
+                if 'watch' in cid or 'watch' in cclass: is_watch = True
+                curr = curr.parent
+            else: break
+        if is_watch: continue
 
-            table = {}
-            if card.find(class_='trade-params'):
-                for b in card.find(class_='trade-params').find_all(class_='param-box'):
-                    lbl = safe_get_text(b.find(class_='param-label'))
-                    val = safe_get_text(b.find(class_='param-value'))
-                    if lbl: table[lbl] = val
-            
-            details = []
-            if card.find(class_='technical-details'):
-                details = [safe_get_text(p) for p in card.find(class_='technical-details').find_all('p')]
-            
-            rationale = safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip()
-            conf = safe_get_text(card.find(class_='confidence'))
-            
-            cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode})
-            
-    else:
-        # Generic fallback
-        tabs = soup.find_all(class_='tab-content')
-        for tab in tabs:
-            tab_id = str(tab.get('id', '')).lower()
-            mode = 'buy'
-            if 'sell' in tab_id or 'reduce' in tab_id: mode = 'sell'
-            elif 'open' in tab_id: mode = 'open'
-            elif 'watch' in tab_id or 'index' in tab_id or 'market' in tab_id or 'notes' in tab_id: continue
-            
-            for card in tab.find_all(class_='card'):
-                header = card.find('h3')
-                if not header: continue
-                parts = safe_get_text(header).split('-', 1)
-                ticker = parts[0].strip()
-                name = parts[1].strip() if len(parts) > 1 else ""
-                
-                details, table, setup = [], {}, "Setup"
-                for p in card.find_all('p'):
-                    txt = safe_get_text(p)
-                    if ':' in txt and len(txt) < 120:
-                        key, val = txt.split(':', 1)
-                        key = key.strip().lower()
-                        val = val.strip()
-                        if any(k in key for k in ['entry', 'target', 'stop', 'r:r', 'current']):
-                            table[key.title()] = val
-                        elif 'setup' in key:
-                            setup = val
-                            details.append(f"Setup: {val}")
-                        else: details.append(txt)
-                    else: details.append(txt)
-                
-                cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': "", 'c': "", 'm': mode})
+        # Extract Data
+        ticker_el = card.find(class_='ticker')
+        header_h3 = card.find('h3')
+        
+        if ticker_el:
+            ticker = safe_get_text(ticker_el)
+            name = safe_get_text(card.find(class_='company-name'))
+        elif header_h3:
+            raw = safe_get_text(header_h3)
+            parts = raw.split('-', 1)
+            ticker = parts[0].strip()
+            name = parts[1].strip() if len(parts)>1 else ""
+        else:
+            continue # Skip invalid cards
+
+        setup = safe_get_text(card.find(class_='setup-type')) or "Setup"
+        
+        mode = 'buy'
+        if 'exit' in setup.lower() or 'reduce' in setup.lower() or 'distribution' in setup.lower(): mode = 'sell'
+        
+        # Determine mode from parent tab
+        curr = card.parent
+        for _ in range(4):
+            if curr:
+                cid = str(curr.get('id', '')).lower()
+                if 'open' in cid or 'pos' in cid: mode = 'open'
+                elif 'reduce' in cid or 'sell' in cid: mode = 'sell'
+                curr = curr.parent
+            else: break
+
+        table = {}
+        # Try explicit params
+        if card.find(class_='trade-params'):
+            for b in card.find(class_='trade-params').find_all(class_='param-box'):
+                lbl = safe_get_text(b.find(class_='param-label'))
+                val = safe_get_text(b.find(class_='param-value'))
+                if lbl: table[lbl] = val
+        else:
+            # Parse paragraphs for "Key: Value"
+            for p in card.find_all('p'):
+                txt = safe_get_text(p)
+                if ':' in txt and len(txt) < 120:
+                    key, val = txt.split(':', 1)
+                    key = key.strip().lower()
+                    val = val.strip()
+                    if any(k in key for k in ['entry', 'target', 'stop', 'r:r', 'current', 'action', 'decision', 'gain', 'loss']):
+                        table[key.title()] = val
+                    elif 'setup' in key:
+                        setup = val
+
+        details = []
+        if card.find(class_='technical-details'):
+            details = [safe_get_text(p) for p in card.find(class_='technical-details').find_all('p')]
+        else:
+            # Generic text extraction
+            for p in card.find_all('p'):
+                txt = safe_get_text(p)
+                if ':' not in txt or len(txt) > 120:
+                    details.append(txt)
+
+        rationale = safe_get_text(card.find(class_='rationale')).replace("Rationale:", "").strip()
+        conf = safe_get_text(card.find(class_='confidence'))
+        
+        cards_data.append({'t': ticker, 'n': name, 's': setup, 'd': details, 'tb': table, 'r': rationale, 'c': conf, 'm': mode})
 
     # Render Groups
     opens = [c for c in cards_data if c['m'] == 'open']
@@ -480,7 +489,7 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Reduce/Exit Recommendations", new_page=True)
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
-    # 6. WATCHLIST (Robust & Formatted)
+    # 5. WATCHLIST (Robust & Deduplicated)
     wl_container = soup.find(id='tab-watchlist') or soup.find(class_='watchlist') or soup.find(id='watch')
     if not wl_container:
         wl_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Watchlist' in safe_get_text(t))
@@ -488,38 +497,49 @@ def parse_and_generate_pdf(html_content):
 
     if wl_container:
         pdf.section_header("Watchlist - Additional Opportunities", new_page=True)
+        pdf.reset_state()
         
-        # Grab all children divs that look like cards
-        items = [d for d in wl_container.find_all('div', recursive=True) if d.find(['h3', 'h4'])]
+        # 1. Find all Headers (h3/h4)
+        headers = wl_container.find_all(['h3', 'h4'])
+        seen_items = set()
         
-        for item in items:
-            header = item.find(['h3', 'h4'])
-            header_text = safe_get_text(header)
+        for h in headers:
+            # 2. Identify the unique card container for this header
+            # Usually parent div. If parent only has header, maybe grandparent.
+            item = h.find_parent('div')
             
-            # Parse Ticker - Name
-            if "-" in header_text:
-                parts = header_text.split("-", 1)
-                ticker = parts[0].strip()
-                name = parts[1].strip()
-            else:
-                ticker = header_text
-                name = ""
+            # Heuristic: If item is just a wrapper (no siblings), go up
+            if item and len(item.find_all(recursive=False)) == 1:
+                if item.parent != wl_container:
+                    item = item.parent
+            
+            if item and item not in seen_items and item != wl_container:
+                seen_items.add(item)
                 
-            # Parse Content
-            details = []
-            table = {}
-            for p in item.find_all('p'):
-                txt = safe_get_text(p)
-                if ':' in txt and len(txt) < 80:
-                    key, val = txt.split(':', 1)
-                    table[key.strip()] = val.strip()
+                # EXTRACT ITEM DATA
+                header_text = safe_get_text(h)
+                if "-" in header_text:
+                    parts = header_text.split("-", 1)
+                    ticker = parts[0].strip()
+                    name = parts[1].strip()
                 else:
-                    details.append(txt)
-            
-            # Use Full Card Layout for Watchlist
-            pdf.content_card(ticker, name, "Watchlist", details, table, "", "", mode='watch')
+                    ticker = header_text
+                    name = ""
+                
+                details = []
+                table = {}
+                for p in item.find_all('p'):
+                    txt = safe_get_text(p)
+                    if ':' in txt and len(txt) < 80:
+                        key, val = txt.split(':', 1)
+                        table[key.strip()] = val.strip()
+                    else:
+                        details.append(txt)
+                
+                # Render using FULL CARD layout
+                pdf.content_card(ticker, name, "Watchlist", details, table, "", "", mode='watch')
 
-    # 7. NOTES
+    # 6. NOTES
     notes_head = soup.find(lambda t: t.name in ['h2','h3'] and 'Notes' in safe_get_text(t))
     if notes_head:
         container = notes_head.find_next_sibling('div') or notes_head.parent
@@ -533,7 +553,7 @@ def parse_and_generate_pdf(html_content):
                 pdf.multi_cell(185, 5, clean_text(safe_get_text(li)), align='L')
                 pdf.ln(2)
 
-    # 8. DISCLAIMER
+    # 7. DISCLAIMER
     disc = soup.find(class_='disclaimer')
     if disc:
         if isinstance(disc, NavigableString): disc = disc.parent
