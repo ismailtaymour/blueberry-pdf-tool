@@ -379,11 +379,14 @@ def parse_and_generate_pdf(html_content):
 
     # 4. CARD EXTRACTION
     cards_data = []
+    
+    # Combined strategy: Look for explicit classes OR generic structure in known tabs
     all_cards = soup.find_all(class_=['setup-card', 'card'])
     
     for card in all_cards:
         if card == idx_card: continue
         
+        # SKIP Watchlist items here (handled separately)
         is_watch = False
         curr = card.parent
         for _ in range(4):
@@ -433,9 +436,12 @@ def parse_and_generate_pdf(html_content):
                 txt = safe_get_text(p)
                 if ':' in txt and len(txt) < 120:
                     key, val = txt.split(':', 1)
-                    table[key.title()] = val
-                elif 'setup' in key.lower():
-                    setup = val
+                    key = key.strip().lower()
+                    val = val.strip()
+                    if any(k in key for k in ['entry', 'target', 'stop', 'r:r', 'current', 'action', 'decision', 'gain', 'loss']):
+                        table[key.title()] = val
+                    elif 'setup' in key:
+                        setup = val
 
         details = []
         if card.find(class_='technical-details'):
@@ -466,42 +472,14 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Reduce/Exit Recommendations", new_page=True)
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
-    # 6. WATCHLIST (Fixed Logic: No Recursion, Smart Table Filter)
-    wl_container = soup.find(id='tab-watchlist') or soup.find(class_='watchlist') or soup.find(id='watch')
-    if not wl_container:
-        wl_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Watchlist' in safe_get_text(t))
-        if wl_header: wl_container = wl_header.find_parent('div')
-
-    if wl_container:
+    # 6. WATCHLIST (Explicit Item Selection)
+    wl_items = soup.find_all(class_='watchlist-item')
+    
+    if wl_items:
         pdf.section_header("Watchlist - Additional Opportunities", new_page=True)
         pdf.reset_state()
         
-        # KEY FIX: Loop DIRECT CHILDREN only to avoid duplicates
-        # Find all direct DIV children that look like cards
-        direct_children = wl_container.find_all('div', recursive=False)
-        
-        # If no direct children found (maybe wrapped in another div), try one level deeper
-        if not direct_children:
-            direct_children = wl_container.find_all('div', recursive=True)
-            # Filter to keep only the 'card-like' items (contain header)
-            # And deduplicate by checking if one contains another
-            valid_items = []
-            for item in direct_children:
-                if item.find(['h3', 'h4']):
-                    valid_items.append(item)
-            # Remove parents if children are also in list
-            final_items = []
-            for item in valid_items:
-                is_parent = False
-                for other in valid_items:
-                    if item != other and item in other.parents:
-                        is_parent = True
-                        break
-                if not is_parent:
-                    final_items.append(item)
-            direct_children = final_items
-
-        for item in direct_children:
+        for item in wl_items:
             h = item.find(['h3', 'h4', 'strong'])
             if not h: continue
             
@@ -519,9 +497,22 @@ def parse_and_generate_pdf(html_content):
             
             for p in item.find_all('p'):
                 txt = safe_get_text(p)
-                # KEY FIX: Only treat SHORT lines as grid parameters. 
-                # Long lines (like "Levels: Accumulation 37-38...") go to Details text.
-                if ':' in txt and len(txt) < 60: 
+                
+                # PIPE PARSER (Fixes jumbled text in grid)
+                if '|' in txt:
+                    parts = txt.split('|')
+                    for part in parts:
+                        part = part.strip()
+                        # Split "Accumulation 37-38" -> Key: Accumulation, Val: 37-38
+                        # Heuristic: split on first space
+                        if ' ' in part:
+                            k, v = part.split(' ', 1)
+                            table[k.strip()] = v.strip()
+                        else:
+                            details.append(part)
+                    continue
+
+                if ':' in txt and len(txt) < 60:
                     key, val = txt.split(':', 1)
                     table[key.strip()] = val.strip()
                 else:
