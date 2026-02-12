@@ -49,7 +49,7 @@ class PDF(FPDF):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
         self.set_text_color(128, 128, 128)
-        self.cell(0, 10, clean_text(f'Blueberry AI Trader | Page {self.page_no()}'), 0, 0, 'C')
+        self.cell(0, 10, clean_text(f'BlueBerry AI Trader | Page {self.page_no()}'), 0, 0, 'C')
 
     def check_page_break(self, height_needed):
         if self.get_y() + height_needed > 270:
@@ -100,6 +100,76 @@ class PDF(FPDF):
         self.multi_cell(180, 5, clean_text(text), align='L')
         self.set_y(start_y + h_needed + 5)
         self.set_line_width(0.2)
+
+    def risk_score_box(self, metrics, footer_text):
+        """Draws the red Risk Score dashboard."""
+        self.reset_state()
+        self.ln(5)
+        
+        # Calculate Height
+        # Header (10) + Metrics Grid (approx 20) + Divider (5) + Footer lines (~15) + Padding
+        h_needed = 60 
+        self.check_page_break(h_needed)
+        
+        start_y = self.get_y()
+        
+        # Main Box Background (Red Gradient simulation)
+        self.set_fill_color(231, 76, 60) 
+        self.rect(10, start_y, 190, h_needed, 'F')
+        
+        # Header
+        self.set_xy(15, start_y + 5)
+        self.set_font('Arial', 'B', 14)
+        self.set_text_color(255, 255, 255)
+        self.cell(0, 8, "5-Factor Risk Assessment", 0, 1, 'L')
+        
+        # Metrics Grid (5 boxes)
+        metric_y = start_y + 15
+        col_width = 35
+        gap = 2
+        start_x = 15
+        
+        self.set_font('Arial', '', 7)
+        for i, m in enumerate(metrics):
+            x = start_x + (i * (col_width + gap))
+            if x + col_width > 200: break # Safety
+            
+            # Semi-transparent box
+            self.set_fill_color(255, 255, 255)
+            # Draw whitish box (simulated transparency not supported in standard FPDF rect, using solid light red/white overlay?)
+            # Actually FPDF doesn't support transparency easily. We'll use a slightly lighter red or white box.
+            # Let's use white text on dark red background without inner boxes to keep it clean, 
+            # OR draw white boxes with black text. Let's do White Boxes.
+            
+            self.set_xy(x, metric_y)
+            self.set_fill_color(255, 255, 255)
+            self.rect(x, metric_y, col_width, 15, 'F')
+            
+            self.set_xy(x+1, metric_y+1)
+            self.set_text_color(192, 57, 43)
+            self.set_font('Arial', 'B', 7)
+            # Title
+            parts = m.split(':', 1)
+            title = parts[0]
+            val = parts[1] if len(parts) > 1 else ""
+            
+            self.cell(col_width-2, 3, clean_text(title), 0, 1, 'L')
+            self.set_font('Arial', '', 6)
+            self.set_x(x+1)
+            self.multi_cell(col_width-2, 3, clean_text(val), 0, 'L')
+
+        # Divider Line
+        div_y = metric_y + 18
+        self.set_draw_color(255, 255, 255)
+        self.line(15, div_y, 195, div_y)
+        
+        # Footer Text
+        self.set_xy(15, div_y + 3)
+        self.set_font('Arial', 'B', 10)
+        self.set_text_color(255, 255, 255)
+        self.multi_cell(180, 5, clean_text(footer_text), align='L')
+        
+        self.set_y(start_y + h_needed + 5)
 
     def draw_parameter_grid(self, params):
         if not params: return
@@ -356,6 +426,19 @@ def parse_and_generate_pdf(html_content):
             
             pdf.table_row(texts, widths, fills, aligns)
 
+        # 2b. RISK SCORE (New)
+        risk_box = idx_card.find_next(class_='risk-score-box')
+        if risk_box:
+            metrics = []
+            for m in risk_box.find_all(class_='risk-metric'):
+                metrics.append(safe_get_text(m))
+            
+            # Grab footer text (everything after grid)
+            footer_div = risk_box.find(style=True) 
+            footer_text = safe_get_text(footer_div) if footer_div else ""
+            
+            pdf.risk_score_box(metrics, footer_text)
+
     # 3. MARKET ASSESSMENT
     assess_header = soup.find(lambda t: t.name in ['h2', 'h3'] and 'Market Trend' in safe_get_text(t))
     if assess_header:
@@ -379,14 +462,11 @@ def parse_and_generate_pdf(html_content):
 
     # 4. CARD EXTRACTION
     cards_data = []
-    
-    # Combined strategy: Look for explicit classes OR generic structure in known tabs
     all_cards = soup.find_all(class_=['setup-card', 'card'])
     
     for card in all_cards:
         if card == idx_card: continue
         
-        # SKIP Watchlist items here (handled separately)
         is_watch = False
         curr = card.parent
         for _ in range(4):
@@ -472,14 +552,32 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Reduce/Exit Recommendations", new_page=True)
         for c in sells: pdf.content_card(c['t'], c['n'], c['s'], c['d'], c['tb'], c['r'], c['c'], mode='sell')
 
-    # 6. WATCHLIST (Explicit Item Selection)
-    wl_items = soup.find_all(class_='watchlist-item')
-    
-    if wl_items:
+    # 6. WATCHLIST (Fixed for Parameters)
+    wl_container = soup.find(id='tab-watchlist') or soup.find(class_='watchlist') or soup.find(id='watch')
+    if not wl_container:
+        wl_header = soup.find(lambda t: t.name in ['h2','h3'] and 'Watchlist' in safe_get_text(t))
+        if wl_header: wl_container = wl_header.find_parent('div')
+
+    if wl_container:
         pdf.section_header("Watchlist - Additional Opportunities", new_page=True)
         pdf.reset_state()
         
-        for item in wl_items:
+        direct_children = wl_container.find_all('div', recursive=False)
+        if not direct_children:
+            direct_children = wl_container.find_all('div', recursive=True)
+            valid_items = [i for i in direct_children if i.find(['h3', 'h4'])]
+            final_items = []
+            for item in valid_items:
+                is_parent = False
+                for other in valid_items:
+                    if item != other and item in other.parents:
+                        is_parent = True
+                        break
+                if not is_parent:
+                    final_items.append(item)
+            direct_children = final_items
+
+        for item in direct_children:
             h = item.find(['h3', 'h4', 'strong'])
             if not h: continue
             
@@ -498,13 +596,19 @@ def parse_and_generate_pdf(html_content):
             for p in item.find_all('p'):
                 txt = safe_get_text(p)
                 
-                # PIPE PARSER (Fixes jumbled text in grid)
-                if '|' in txt:
-                    parts = txt.split('|')
+                # NEW PARAMETER PARSING
+                if 'Parameter' in txt or '|' in txt:
+                    # Remove "Parameters:" prefix
+                    if ':' in txt: 
+                        _, val_part = txt.split(':', 1)
+                    else: 
+                        val_part = txt
+                        
+                    parts = val_part.split('|')
                     for part in parts:
                         part = part.strip()
-                        # Split "Accumulation 37-38" -> Key: Accumulation, Val: 37-38
-                        # Heuristic: split on first space
+                        # Heuristic: Split "Accumulation 37-38" -> "Accumulation", "37-38"
+                        # We split on the FIRST space found
                         if ' ' in part:
                             k, v = part.split(' ', 1)
                             table[k.strip()] = v.strip()
