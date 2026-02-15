@@ -49,7 +49,9 @@ class PDF(FPDF):
         self.set_text_color(200, 200, 200)
         self.set_xy(10, 18)
         self.cell(0, 4, self.subtitle_text, 0, 1, 'C')
-        self.ln(2)
+        
+        # CRITICAL FIX: Lock Y cursor below the header to prevent overlap on new pages
+        self.set_y(30)
 
     def footer(self):
         self.set_y(-12) 
@@ -62,6 +64,7 @@ class PDF(FPDF):
     def check_page_break(self, height_needed):
         if self.get_y() + height_needed > 280:
             self.add_page()
+            # FPDF automatically calls header() which safely resets Y to 30
 
     def reset_state(self):
         self.set_left_margin(8) 
@@ -71,7 +74,7 @@ class PDF(FPDF):
 
     def section_header(self, title, new_page=False):
         self.reset_state()
-        # Only break page if explicitly requested AND not at the top
+        
         if new_page and self.get_y() > 35: 
             self.add_page()
         elif self.get_y() > 260: 
@@ -90,8 +93,8 @@ class PDF(FPDF):
     def alert_box(self, title, text):
         self.reset_state()
         self.set_font('Arial', '', 8.5)
-        lines = len(self.multi_cell(186, 4.2, clean_text(text), split_only=True))
-        h_needed = (lines * 4.2) + 10 
+        lines = len(self.multi_cell(186, 4, clean_text(text), split_only=True))
+        h_needed = (lines * 4) + 10 
         
         self.check_page_break(h_needed)
         start_y = self.get_y()
@@ -109,13 +112,13 @@ class PDF(FPDF):
         self.set_xy(11, start_y + 7)
         self.set_font('Arial', '', 8.5)
         self.set_text_color(60, 0, 0)
-        self.multi_cell(188, 4.2, clean_text(text), align='L')
+        self.multi_cell(188, 4, clean_text(text), align='L')
         self.set_y(start_y + h_needed + 2)
         self.set_line_width(0.2)
 
     def draw_index_card(self, title, metrics):
         self.reset_state()
-        h_needed = 10 + (len(metrics) * 5.5) + 3
+        h_needed = 10 + (len(metrics) * 5) + 3 # Compressed line height
         self.check_page_break(h_needed)
         
         start_y = self.get_y()
@@ -137,22 +140,22 @@ class PDF(FPDF):
         for lbl, val, trend in metrics:
             self.set_xy(12, curr_y)
             self.set_text_color(85, 85, 85)
-            self.set_font('Arial', 'B', 8.5)
-            self.cell(80, 5.5, lbl, 0, 0, 'L')
+            self.set_font('Arial', 'B', 8)
+            self.cell(80, 5, lbl, 0, 0, 'L')
             
             if trend == 'bull': self.set_text_color(39, 174, 96)
             elif trend == 'bear': self.set_text_color(231, 76, 60)
             else: self.set_text_color(44, 62, 80)
             
-            self.cell(100, 5.5, val, 0, 1, 'R')
-            curr_y += 5.5
+            self.cell(100, 5, val, 0, 1, 'R')
+            curr_y += 5
             self.line(12, curr_y, 198, curr_y)
             
         self.set_y(start_y + h_needed + 2)
 
     def risk_summary_box(self, risk_data):
         self.reset_state()
-        h_needed = 40 
+        h_needed = 38 
         self.check_page_break(h_needed)
         start_y = self.get_y()
         
@@ -172,15 +175,15 @@ class PDF(FPDF):
         # White Box
         box_y = self.get_y() + 3
         self.set_fill_color(255, 255, 255)
-        self.rect(12, box_y, 186, 17, 'F')
+        self.rect(12, box_y, 186, 16, 'F')
         
-        self.set_xy(12, box_y + 3)
+        self.set_xy(12, box_y + 2)
         self.set_text_color(192, 57, 43) 
         self.set_font('Arial', 'B', 9)
         combo_txt = f"{clean_text(risk_data.get('exposure', ''))}  |  {clean_text(risk_data.get('allocation', ''))}"
         self.cell(186, 4, combo_txt, 0, 1, 'C')
         
-        self.set_xy(14, box_y + 8)
+        self.set_xy(14, box_y + 7)
         self.set_font('Arial', '', 7.5)
         self.set_text_color(100, 100, 100)
         self.multi_cell(182, 3.5, clean_text(risk_data.get('details', '')), align='C')
@@ -192,10 +195,10 @@ class PDF(FPDF):
         title = safe_get_text(assess_soup.find('h3'))
         p_tags = assess_soup.find_all('p')
         
-        h_needed = 10
+        h_needed = 8
         self.set_font('Arial', '', 8.5)
         for p in p_tags:
-            h_needed += len(self.multi_cell(186, 4.2, safe_get_text(p), split_only=True)) * 4.2 + 2
+            h_needed += len(self.multi_cell(186, 4, safe_get_text(p), split_only=True)) * 4 + 2
             
         self.check_page_break(h_needed)
         start_y = self.get_y()
@@ -214,7 +217,7 @@ class PDF(FPDF):
         self.set_font('Arial', '', 8.5)
         for p in p_tags:
             self.set_xy(12, curr_y)
-            self.multi_cell(186, 4.2, safe_get_text(p), align='L')
+            self.multi_cell(186, 4, safe_get_text(p), align='L')
             curr_y = self.get_y() + 2
             
         self.set_y(start_y + h_needed + 2)
@@ -244,30 +247,31 @@ class PDF(FPDF):
         rationale_el = card_soup.find(class_='rationale')
         confidence_el = card_soup.find(class_=lambda c: c and 'confidence' in c)
         
-        # PARAMETER GRID CALCULATION (Smart 2x2 for 4 items, 3-col otherwise)
+        # PARAMETER GRID CALCULATION (Smart 2x2 vs 3-col)
         params_count = len(params_boxes)
         if params_count == 4:
             col_count = 2
-            box_width = 91.5
-            gap = 3
+            box_width = 88
+            gap = 4
         elif params_count in [1, 2]:
             col_count = params_count
-            box_width = 91.5
-            gap = 3
+            box_width = 88
+            gap = 4
         else:
             col_count = 3
-            box_width = 60
-            gap = 3
+            box_width = 58
+            gap = 4
             
         rows_needed = math.ceil(params_count / col_count) if params_count > 0 else 0
-        h_params = (rows_needed * 12 + 4) if params_count > 0 else 0 
+        h_params = (rows_needed * 14 + 6) if params_count > 0 else 0 
 
         # HEIGHT CALCULATION
         self.set_font('Arial', '', 8.5)
-        h_details = sum([len(self.multi_cell(186, 4.2, safe_get_text(p), split_only=True)) * 4.2 + 2 for p in details_ps])
-        h_rationale = (len(self.multi_cell(184, 4.2, safe_get_text(rationale_el), split_only=True)) * 4.2 + 4) if rationale_el else 0
+        h_details = sum([len(self.multi_cell(186, 4.5, safe_get_text(p), split_only=True)) * 4.5 + 2 for p in details_ps])
+        h_rationale = (len(self.multi_cell(184, 4.5, safe_get_text(rationale_el), split_only=True)) * 4.5 + 4) if rationale_el else 0
         
-        total_height = 8 + (h_details + 3 if h_details else 0) + h_params + h_rationale + (8 if confidence_el else 0) + 2
+        # Fixed header height = 18
+        total_height = 18 + (h_details + 3 if h_details else 0) + h_params + h_rationale + (8 if confidence_el else 0) + 2
         self.check_page_break(total_height)
         start_y = self.get_y()
         
@@ -276,29 +280,30 @@ class PDF(FPDF):
         self.set_draw_color(230, 230, 230)
         self.rect(8, start_y, 194, total_height, 'DF')
         
-        # HEADER (Aligned perfectly to avoid overlap)
-        self.set_xy(10, start_y + 2)
-        self.set_font('Arial', 'B', 11)
+        # HEADER (Stacked text, right-aligned badge)
+        self.set_xy(12, start_y + 3)
+        self.set_font('Arial', 'B', 13)
         self.set_text_color(44, 62, 80)
-        self.cell(20, 5, ticker, 0, 0, 'L')
+        self.cell(100, 6, ticker, 0, 1, 'L')
         
+        self.set_xy(12, start_y + 9)
         self.set_font('Arial', '', 9)
         self.set_text_color(102, 102, 102)
-        self.cell(100, 5, name, 0, 0, 'L')
+        self.cell(100, 5, name, 0, 1, 'L')
         
-        # Dynamically sized Badge pinned to right edge
-        self.set_font('Arial', 'B', 8)
-        w_badge = self.get_string_width(badge_txt) + 8
-        w_badge = max(w_badge, 20)
-        self.set_xy(198 - w_badge, start_y + 1.5)
+        # Badge
+        self.set_font('Arial', 'B', 9)
+        w_badge = self.get_string_width(badge_txt) + 12
+        w_badge = max(w_badge, 22)
+        self.set_xy(202 - w_badge - 4, start_y + 4) 
         self.set_fill_color(badge_r, badge_g, badge_b)
         self.set_text_color(255, 255, 255)
-        self.cell(w_badge, 5.5, badge_txt, 0, 1, 'C', fill=True)
+        self.cell(w_badge, 7, badge_txt, 0, 1, 'C', fill=True)
         
         self.set_draw_color(240, 240, 240)
-        self.line(10, start_y + 8, 200, start_y + 8)
+        self.line(10, start_y + 16, 200, start_y + 16)
         
-        curr_y = start_y + 8
+        curr_y = start_y + 18
         
         # DETAILS
         if details_ps:
@@ -309,8 +314,8 @@ class PDF(FPDF):
             self.set_font('Arial', '', 8.5)
             for p in details_ps:
                 self.set_xy(12, curr_y)
-                self.multi_cell(186, 4.2, safe_get_text(p), align='L')
-                curr_y = self.get_y() + 2
+                self.multi_cell(186, 4.5, safe_get_text(p), align='L')
+                curr_y = self.get_y() + 2 
             curr_y += 1.5
 
         # PARAMS GRID
@@ -318,15 +323,19 @@ class PDF(FPDF):
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
             
-            grid_y = curr_y + 2
+            # Center the grid automatically
+            grid_width = (col_count * box_width) + ((col_count - 1) * gap)
+            start_x = 10 + (190 - grid_width) / 2
+            
+            grid_y = curr_y + 3
             for i, box in enumerate(params_boxes):
                 row = i // col_count
                 col = i % col_count
-                x = 12 + (col * (box_width + gap))
-                y = grid_y + (row * 12)
+                x = start_x + (col * (box_width + gap))
+                y = grid_y + (row * 14)
                 
                 self.set_fill_color(255, 255, 255)
-                self.rect(x, y, box_width, 10, 'F')
+                self.rect(x, y, box_width, 11, 'F')
                 
                 lbl = safe_get_text(box.find(class_='param-label'))
                 val_el = box.find(class_='param-value')
@@ -340,14 +349,14 @@ class PDF(FPDF):
                     elif 'f39c12' in st or 'orange' in st: val_r, val_g, val_b = 243, 156, 18
                 
                 self.set_xy(x, y + 1.5)
-                self.set_font('Arial', '', 6.5)
+                self.set_font('Arial', '', 7)
                 self.set_text_color(100, 100, 100)
-                self.cell(box_width, 3, lbl.upper(), 0, 1, 'C')
+                self.cell(box_width, 4, lbl.upper(), 0, 1, 'C')
                 
-                self.set_xy(x, y + 4.5)
-                self.set_font('Arial', 'B', 9)
+                self.set_xy(x, y + 5.5)
+                self.set_font('Arial', 'B', 9.5)
                 self.set_text_color(val_r, val_g, val_b)
-                self.cell(box_width, 4, val, 0, 1, 'C')
+                self.cell(box_width, 5, val, 0, 1, 'C')
                 
             curr_y += h_params
 
@@ -377,9 +386,9 @@ class PDF(FPDF):
             self.set_text_color(*text_c)
             self.set_font('Arial', 'B', 8)
             
-            self.set_xy(10, curr_y + 1)
+            self.set_xy(12, curr_y + 1)
             w_txt = self.get_string_width(txt) + 6
-            self.rect(10, curr_y + 1, w_txt, 6, 'F')
+            self.rect(12, curr_y + 1, w_txt, 6, 'F')
             self.cell(w_txt, 6, txt, 0, 1, 'C')
 
         self.set_y(start_y + total_height + 2)
@@ -449,7 +458,7 @@ def parse_and_generate_pdf(html_content):
     # 1. INDEX ANALYSIS
     tab_index = soup.find(id='tab-index')
     if tab_index:
-        pdf.section_header("Index Technical Status", new_page=False) # Ensures it stays on page 1
+        pdf.section_header("Index Technical Status", new_page=False) # Keep on Page 1
         idx_card = tab_index.find(class_='index-card')
         if idx_card:
             title = safe_get_text(idx_card.find('h3'))
@@ -484,14 +493,14 @@ def parse_and_generate_pdf(html_content):
     # 2. MARKET TREND
     tab_market = soup.find(id='tab-market')
     if tab_market:
-        pdf.section_header("Market Trend Assessment", new_page=False) # Ensures it shares page with Index
+        pdf.section_header("Market Trend Assessment", new_page=False) # Keep on Page 1 (will fit seamlessly)
         for assess in tab_market.find_all(class_='market-assessment'):
             pdf.draw_market_assessment(assess)
 
     # 3. TOP OPPORTUNITIES
     tab_buy = soup.find(id='tab-buy')
     if tab_buy:
-        pdf.section_header("Top Accumulation Opportunities", new_page=True) # Forces break from here on
+        pdf.section_header("Top Accumulation Opportunities", new_page=True) # Forces break to page 2
         intro_p = tab_buy.find('p', style=lambda s: s and 'background' in s)
         if intro_p:
             pdf.reset_state()
