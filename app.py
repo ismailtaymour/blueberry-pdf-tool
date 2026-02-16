@@ -13,7 +13,8 @@ def clean_text(text):
     replacements = {
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' ',
-        '📊': '', '📈': '', '🎯': '', '💼': '', '⚠️': '', '👀': '', '📝': ''
+        '📊': '', '📈': '', '🎯': '', '💼': '', '⚠️': '', '👀': '', '📝': '',
+        '•': '-', '\u2022': '-' # Force bullet points to hyphens
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
@@ -30,7 +31,6 @@ class PDF(FPDF):
         self.subtitle_text = subtitle_text
 
     def header(self):
-        # Ultra Compact Header
         self.set_fill_color(44, 62, 80)
         self.rect(0, 0, 210, 26, 'F') 
         
@@ -49,9 +49,8 @@ class PDF(FPDF):
         self.set_font('Arial', '', 7.5)
         self.set_text_color(200, 200, 200)
         self.set_xy(10, 18)
-        self.cell(0, 4, self.subtitle_text, 0, 1, 'C')
+        self.cell(0, 4, clean_text(self.subtitle_text), 0, 1, 'C')
         
-        # Lock cursor safely below header to prevent overlaps
         self.set_y(30)
 
     def footer(self):
@@ -80,9 +79,8 @@ class PDF(FPDF):
             self.add_page()
             
         self.ln(2)
-        # Try to extract icon or color if needed, defaulting to Blue
         color = (52, 152, 219)
-        if "Dashboard" in title: color = (155, 89, 182) # Purple for dashboard
+        if "Dashboard" in title: color = (155, 89, 182) 
         
         self.set_fill_color(*color)
         self.rect(8, self.get_y(), 1.5, 6, 'F') 
@@ -95,6 +93,7 @@ class PDF(FPDF):
 
     def draw_notice_box(self, text, style='neutral'):
         self.reset_state()
+        text = clean_text(text)
         self.set_font('Arial', '', 8.5)
         lines = len(self.multi_cell(186, 4.2, text, split_only=True))
         h_needed = (lines * 4.2) + 6 
@@ -117,21 +116,18 @@ class PDF(FPDF):
         self.set_y(start_y + h_needed + 2)
 
     def draw_generic_card(self, soup, card_type='index'):
-        """Universal parser for Index Cards, Market Assessments, and Dashboard Cards"""
         self.reset_state()
         
-        # Color Themes
         if card_type == 'dashboard':
             bg_c, border_c, accent_c = (247, 243, 255), (230, 220, 245), (155, 89, 182)
             text_main, text_sub = (44, 62, 80), (85, 85, 85)
         elif card_type == 'market':
             bg_c, border_c, accent_c = (109, 102, 204), (109, 102, 204), (255, 255, 255)
             text_main, text_sub = (255, 255, 255), (240, 240, 240)
-        else: # index
+        else: 
             bg_c, border_c, accent_c = (240, 244, 248), (220, 225, 230), (52, 152, 219)
             text_main, text_sub = (44, 62, 80), (85, 85, 85)
             
-        # 1. Component Extraction & Height Calculation
         h_needed = 4
         elements = []
         
@@ -173,13 +169,11 @@ class PDF(FPDF):
         h_needed += 4
         self.check_page_break(h_needed)
         
-        # 2. Draw Background
         start_y = self.get_y()
         self.set_fill_color(*bg_c)
         self.set_draw_color(*border_c)
         self.rect(8, start_y, 194, h_needed, 'DF')
         
-        # 3. Render Components
         curr_y = start_y + 3
         for el in elements:
             type_ = el[0]
@@ -199,7 +193,6 @@ class PDF(FPDF):
                 self.set_xy(12, curr_y)
                 txt = el[2]
                 
-                # Dynamic text styling based on content
                 if 'trend-bull' in str(el[1]) or 'expanding' in txt.lower(): self.set_text_color(39, 174, 96)
                 elif 'trend-bear' in str(el[1]) or 'declining' in txt.lower(): self.set_text_color(231, 76, 60)
                 else: self.set_text_color(*text_sub)
@@ -294,29 +287,24 @@ class PDF(FPDF):
         self.set_y(start_y + h_needed)
 
     def draw_setup_card(self, card_soup):
-        """Universal parser for Buy, Open, Reduce, Watchlist, and Notes Cards"""
         self.reset_state()
         
-        # 1. HEADER
         header = card_soup.find(class_='setup-header')
         ticker = safe_get_text(header.find(class_='ticker')) if header else ""
         badge_el = header.find(class_='setup-type') if header else None
         badge_txt = safe_get_text(badge_el)
         
-        # 2. DETAILS (Supports Paragraphs & Lists)
         details_div = card_soup.find(class_='technical-details')
         details_texts = []
         if details_div:
             for child in details_div.find_all(['p', 'li']):
-                prefix = "• " if child.name == 'li' else ""
+                prefix = "- " if child.name == 'li' else "" # ASCII compliant prefix
                 txt = safe_get_text(child)
                 if txt: details_texts.append(prefix + txt)
                 
-        # 3. PARAMS
         params_div = card_soup.find(class_='trade-params')
         params_boxes = params_div.find_all(class_='param-box') if params_div else []
         
-        # 4. RATIONALE & EXTRAS
         rationale_el = card_soup.find(class_='rationale')
         confidence_el = card_soup.find(class_=lambda c: c and 'confidence' in c)
         
@@ -326,7 +314,6 @@ class PDF(FPDF):
                 txt = safe_get_text(child)
                 if txt: extra_texts.append(txt)
 
-        # HEIGHT CALCULATION
         self.set_font('Arial', '', 8.5)
         h_details = sum([len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 2 for t in details_texts])
         h_extras = sum([len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 2 for t in extra_texts])
@@ -342,12 +329,10 @@ class PDF(FPDF):
         self.check_page_break(total_height)
         start_y = self.get_y()
         
-        # DRAW CARD BG
         self.set_fill_color(255, 255, 255)
         self.set_draw_color(230, 230, 230)
         self.rect(8, start_y, 194, total_height, 'DF')
         
-        # DRAW HEADER
         self.set_xy(12, start_y + 3)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(44, 62, 80)
@@ -356,7 +341,7 @@ class PDF(FPDF):
         self.set_font('Arial', 'B', 8)
         w_badge = max(self.get_string_width(badge_txt) + 12, 22)
         self.set_xy(202 - w_badge - 4, start_y + 3) 
-        self.set_fill_color(109, 102, 204) # Default Purple
+        self.set_fill_color(109, 102, 204) 
         self.set_text_color(255, 255, 255)
         self.cell(w_badge, 6, badge_txt, 0, 1, 'C', fill=True)
         
@@ -364,7 +349,6 @@ class PDF(FPDF):
         self.line(10, start_y + 11, 200, start_y + 11)
         curr_y = start_y + 13
         
-        # DRAW DETAILS
         if details_texts:
             self.set_fill_color(248, 249, 250)
             self.rect(10, curr_y, 190, h_details + 3, 'F')
@@ -374,7 +358,6 @@ class PDF(FPDF):
                 self.set_xy(12, curr_y)
                 self.set_font('Arial', '', 8.5)
                 
-                # Smart Coloring
                 if 'trend-bull' in t or 'Hold' in t or 'Breakout' in t: self.set_text_color(39, 174, 96)
                 elif 'trend-bear' in t or 'Exit' in t or 'Breakdown' in t: self.set_text_color(231, 76, 60)
                 else: self.set_text_color(60, 60, 60)
@@ -383,7 +366,6 @@ class PDF(FPDF):
                 curr_y = self.get_y() + 2 
             curr_y += 1.5
 
-        # DRAW PARAMS
         if params_boxes:
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
@@ -412,7 +394,6 @@ class PDF(FPDF):
                 self.set_xy(x, y + 5.5)
                 self.set_font('Arial', 'B', 9.5)
                 
-                # Inline color parser
                 val_r, val_g, val_b = 44, 62, 80
                 if val_node and val_node.has_attr('style'):
                     st = val_node['style'].lower()
@@ -423,7 +404,6 @@ class PDF(FPDF):
                 
             curr_y += h_params
 
-        # DRAW RATIONALE
         if rationale_el:
             self.set_fill_color(232, 244, 248) 
             self.rect(10, curr_y, 190, h_rationale, 'F')
@@ -436,17 +416,15 @@ class PDF(FPDF):
             self.multi_cell(184, 4.2, safe_get_text(rationale_el), align='L')
             curr_y += h_rationale
 
-        # DRAW EXTRAS (e.g. Invalidation Cues)
         if extra_texts:
             curr_y += 1
             self.set_font('Arial', 'B', 8.5)
-            self.set_text_color(114, 28, 36) # Dark Red
+            self.set_text_color(114, 28, 36) 
             for t in extra_texts:
                 self.set_xy(12, curr_y)
                 self.multi_cell(186, 4.2, t, align='L')
                 curr_y = self.get_y() + 1
                 
-        # DRAW CONFIDENCE
         if confidence_el:
             txt = safe_get_text(confidence_el)
             c_class = confidence_el.get('class', [])
@@ -513,7 +491,6 @@ def parse_and_generate_pdf(html_content):
         txt = safe_get_text(alert).replace(title, "").strip()
         pdf.draw_notice_box(txt, style='warning')
 
-    # SECTION 0: Dashboard
     dash_head = soup.find(string=re.compile("Market Positioning Dashboard"))
     if dash_head:
         section = dash_head.find_parent(class_='section')
@@ -522,11 +499,10 @@ def parse_and_generate_pdf(html_content):
             card = section.find(class_='index-card')
             if card: pdf.draw_generic_card(card, 'dashboard')
 
-    # THE TABS LOOP
     tabs = [
-        ('tab-index', "Index Analysis — EGX30", False), # Kept on Page 1
-        ('tab-market', "Market Trend (Internal Structure)", False), # Kept on Page 1
-        ('tab-buy', "Top Opportunities", True), # Forces Page 2
+        ('tab-index', "Index Analysis — EGX30", False),
+        ('tab-market', "Market Trend (Internal Structure)", False),
+        ('tab-buy', "Top Opportunities", True),
         ('tab-open', "Open Positions Management", True),
         ('tab-reduce', "Reduce / Distribute", True),
         ('tab-watchlist', "Watchlist", True),
@@ -539,7 +515,6 @@ def parse_and_generate_pdf(html_content):
         
         pdf.section_header(header_title, new_page=force_new_page)
         
-        # Parse Every Child Dynamically
         sections = tab.find_all(class_='section')
         for sec in sections:
             for child in sec.children:
@@ -556,11 +531,10 @@ def parse_and_generate_pdf(html_content):
                         
                 elif child.name == 'p':
                     txt = safe_get_text(child)
-                    if len(txt) > 10 and "Note:" in txt or "Reminder:" in txt or "Top 3" in txt:
+                    if len(txt) > 10 and ("Note:" in txt or "Reminder:" in txt or "Top 3" in txt):
                         style = 'warning' if 'Distribute' in header_title else 'neutral'
                         pdf.draw_notice_box(txt, style=style)
 
-    # DISCLAIMER
     disclaimer = soup.find(class_='disclaimer')
     if disclaimer:
         pdf.draw_disclaimer(disclaimer)
