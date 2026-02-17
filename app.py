@@ -1,6 +1,6 @@
 import streamlit as st
 from fpdf import FPDF
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup
 import tempfile
 import re
 import math
@@ -274,13 +274,13 @@ class PDF(FPDF):
                 color = (39, 174, 96) if 'trend-bull' in c_class else (231, 76, 60) if 'trend-bear' in c_class else (44, 62, 80)
                 elements.append(('metric', lbl, val, color))
                 
-            # CRITICAL FIX: Add Support for lists inside Index Cards (Market Radar)
+            # MARKET RADAR FIX: Handles Unordered Lists dynamically
             elif child.name in ['ul', 'ol']:
                 for li in child.find_all('li'):
                     txt = "- " + safe_get_text(li)
                     lines = len(self.multi_cell(182, 4.2, txt, split_only=True))
                     h_needed += (lines * 4.2) + 2
-                    elements.append(('li', txt, (85, 85, 85), lines))
+                    elements.append(('li', txt, lines))
                 
         self.check_page_break(h_needed)
         start_y = self.get_y()
@@ -319,7 +319,7 @@ class PDF(FPDF):
                 self.set_xy(14, curr_y)
                 txt = el[1]
                 
-                # Intelligent color formatting for Radar items
+                # Dynamic coloring for Positive/Negative list items
                 if '+' in txt: self.set_text_color(39, 174, 96)
                 elif '-' in txt and '1-3' not in txt: self.set_text_color(231, 76, 60)
                 else: self.set_text_color(60, 60, 60)
@@ -334,7 +334,7 @@ class PDF(FPDF):
                 else:
                     self.set_font('Arial', '', 8.5)
                     self.multi_cell(182, 4.2, txt, align='L')
-                curr_y += (el[3] * 4.2) + 2
+                curr_y += (el[2] * 4.2) + 2
                 
         self.set_y(start_y + h_needed + 3)
 
@@ -369,6 +369,42 @@ class PDF(FPDF):
             curr_y = self.get_y() + 2
             
         self.set_y(start_y + h_needed + 3)
+
+    def draw_risk_summary_box(self, risk_data):
+        self.reset_state()
+        h_needed = 38 
+        self.check_page_break(h_needed)
+        start_y = self.get_y()
+        
+        self.set_fill_color(231, 76, 60)
+        self.rect(8, start_y, 194, h_needed, 'F')
+        
+        self.set_xy(8, start_y + 2)
+        self.set_font('Arial', 'B', 11)
+        self.set_text_color(255, 255, 255)
+        self.cell(194, 5, "Risk Assessment", 0, 1, 'C')
+        
+        self.set_font('Arial', 'B', 12)
+        self.cell(194, 5, clean_text(risk_data.get('score', 'Risk Score: N/A')), 0, 1, 'C')
+        self.set_font('Arial', '', 9)
+        self.cell(194, 4, clean_text(risk_data.get('env', '')), 0, 1, 'C')
+        
+        box_y = self.get_y() + 3
+        self.set_fill_color(255, 255, 255)
+        self.rect(12, box_y, 186, 16, 'F')
+        
+        self.set_xy(12, box_y + 2)
+        self.set_text_color(192, 57, 43) 
+        self.set_font('Arial', 'B', 9)
+        combo_txt = f"{clean_text(risk_data.get('exposure', ''))}  |  {clean_text(risk_data.get('allocation', ''))}"
+        self.cell(186, 4, combo_txt, 0, 1, 'C')
+        
+        self.set_xy(14, box_y + 7)
+        self.set_font('Arial', '', 7.5)
+        self.set_text_color(100, 100, 100)
+        self.multi_cell(182, 3.5, clean_text(risk_data.get('details', '')), align='C')
+        
+        self.set_y(start_y + h_needed + 2)
 
     def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
@@ -424,10 +460,12 @@ class PDF(FPDF):
             if not txt: continue
             
             if ('Parameters:' in txt or '|' in txt) and not params_div:
-                if ':' in txt: _, txt = txt.split(':', 1)
+                if txt.startswith('Parameters:'): _, txt = txt.split(':', 1)
                 for part in txt.split('|'):
                     part = part.strip()
-                    if ' ' in part and any(c.isdigit() for c in part):
+                    if 'R:R' in part:
+                        parsed_params.append({'label': 'Risk/Reward', 'val': part.replace('R:R', '').strip(), 'color': (44, 62, 80)})
+                    elif ' ' in part and any(c.isdigit() for c in part):
                         k, v = part.split(' ', 1)
                         if k[0].isdigit(): val, lbl = k, v
                         else: lbl, val = k, v
@@ -439,7 +477,6 @@ class PDF(FPDF):
                         elif 'entry' in lbl: label = 'Entry'
                         else: label = lbl.title()
                         parsed_params.append({'label': label, 'val': val, 'color': (44, 62, 80)})
-                    elif ':' in part: parsed_params.append({'label': 'Risk/Reward', 'val': part, 'color': (44, 62, 80)})
                     elif '%' in part: parsed_params.append({'label': 'Allocation', 'val': part, 'color': (44, 62, 80)})
                     else: details_texts.append(prefix + part)
             elif 'Invalidation Cue:' in txt:
@@ -450,25 +487,45 @@ class PDF(FPDF):
         rationale_el = card_soup.find(class_='rationale')
         confidence_el = card_soup.find(class_=lambda c: c and 'confidence' in c)
         
-        # 3. HEIGHT & DYNAMIC GRID CALCULATION
+        # 3. EXACT HEIGHT & WRAPPING GRID CALCULATION
         self.set_font('Arial', '', 8.5)
-        h_details = sum([len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 2 for t in details_texts])
-        h_extras = sum([len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 2 for t in extra_texts])
+        
+        h_details = 0
+        if details_texts:
+            h_details += 3
+            for t in details_texts:
+                h_details += len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 2
+            h_details += 1.5
+            
+        h_extras = 0
+        if extra_texts:
+            h_extras += 1
+            for t in extra_texts:
+                h_extras += len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 1
+                
         h_rationale = (len(self.multi_cell(184, 4.2, safe_get_text(rationale_el), split_only=True)) * 4.2 + 4) if rationale_el else 0
         
-        # CRITICAL FIX: Intelligent Wrapping Grid
+        # GRID WRAPPING FIX
         params_count = len(parsed_params)
         if params_count == 4: cols, box_w, gap = 2, 90, 4
         elif params_count in [1, 2]: cols, box_w, gap = params_count, 90, 4
-        else: cols, box_w, gap = 3, 60, 4
+        else: cols, box_w, gap = 3, 58, 4
         
-        # Check if values are extremely long to expand height
-        max_val_len = max([len(p['val']) for p in parsed_params]) if parsed_params else 0
-        box_h = 16 if max_val_len > 24 else 11 
-        
-        h_params = (math.ceil(params_count / cols) * (box_h + 3) + 6) if params_count > 0 else 0 
+        row_heights = []
+        rows = math.ceil(params_count / cols) if params_count > 0 else 0
+        for r in range(rows):
+            max_lines = 1
+            for c in range(cols):
+                idx = r * cols + c
+                if idx < params_count:
+                    lines = len(self.multi_cell(box_w - 4, 3.8, parsed_params[idx]['val'], split_only=True))
+                    if lines > max_lines: max_lines = lines
+            row_heights.append((max_lines * 3.8) + 8) 
+            
+        h_params = sum(row_heights) + (len(row_heights) * 2) + 4 if params_count > 0 else 0
 
-        total_height = 14 + (h_details + 3 if h_details else 0) + h_params + h_rationale + (h_extras + 2 if h_extras else 0) + (8 if confidence_el else 0) + 4
+        # Exact boundary mapping
+        total_height = 14 + h_details + h_params + h_rationale + h_extras + (8 if confidence_el else 0) + 4
         self.check_page_break(total_height)
         start_y = self.get_y()
         
@@ -504,7 +561,7 @@ class PDF(FPDF):
         # 6. DRAW DETAILS
         if details_texts:
             self.set_fill_color(248, 249, 250)
-            self.rect(10, curr_y, 190, h_details + 3, 'F')
+            self.rect(10, curr_y, 190, h_details, 'F')
             curr_y += 1.5
             
             for t in details_texts:
@@ -527,7 +584,7 @@ class PDF(FPDF):
                 curr_y = self.get_y() + 2 
             curr_y += 1.5
 
-        # 7. DRAW PARAMS (Intelligent Wrapping Logic)
+        # 7. DRAW PARAMS (Dynamic Text Wrapping Engine)
         if parsed_params:
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
@@ -535,32 +592,31 @@ class PDF(FPDF):
             start_x = 10 + (190 - ((cols * box_w) + ((cols - 1) * gap))) / 2
             grid_y = curr_y + 3
             
-            for i, p_data in enumerate(parsed_params):
-                row = i // cols
-                col = i % cols
-                x = start_x + (col * (box_w + gap))
-                y = grid_y + (row * (box_h + 3))
+            for r in range(rows):
+                row_h = row_heights[r]
+                for c in range(cols):
+                    idx = r * cols + c
+                    if idx >= params_count: break
+                    p_data = parsed_params[idx]
+                    
+                    x = start_x + (c * (box_w + gap))
+                    y = grid_y
+                    
+                    self.set_fill_color(255, 255, 255)
+                    self.rect(x, y, box_w, row_h, 'F')
+                    
+                    self.set_xy(x, y + 1.5)
+                    self.set_font('Arial', '', 6.5)
+                    self.set_text_color(100, 100, 100)
+                    self.cell(box_w, 3, p_data['label'].upper(), 0, 1, 'C')
+                    
+                    # Dynamically centered multi-cell text wrap
+                    self.set_xy(x + 2, y + 5)
+                    self.set_font('Arial', 'B', 8.5)
+                    self.set_text_color(*p_data['color'])
+                    self.multi_cell(box_w - 4, 3.8, p_data['val'], align='C')
                 
-                self.set_fill_color(255, 255, 255)
-                self.rect(x, y, box_w, box_h, 'F')
-                
-                self.set_xy(x, y + 1.5)
-                self.set_font('Arial', '', 6.5)
-                self.set_text_color(100, 100, 100)
-                self.cell(box_w, 4, p_data['label'].upper(), 0, 1, 'C')
-                
-                self.set_text_color(*p_data['color'])
-                val_txt = p_data['val']
-                
-                # Check if value overflows, and multi_cell wrap it if needed
-                self.set_font('Arial', 'B', 9.5)
-                if self.get_string_width(val_txt) > box_w - 4:
-                    self.set_font('Arial', 'B', 8)
-                    self.set_xy(x + 1, y + 6)
-                    self.multi_cell(box_w - 2, 3.8, val_txt, align='C')
-                else:
-                    self.set_xy(x, y + 5.5)
-                    self.cell(box_w, box_h - 5.5, val_txt, 0, 1, 'C')
+                grid_y += row_h + 2
                 
             curr_y += h_params
 
@@ -600,12 +656,13 @@ class PDF(FPDF):
             self.set_text_color(*text_c)
             self.set_font('Arial', 'B', 8)
             
-            self.set_xy(10, curr_y + 1)
+            self.set_xy(12, curr_y + 1)
             w_txt = self.get_string_width(txt) + 8
-            self.rect(10, curr_y + 1, w_txt, 6, 'F')
+            self.rect(12, curr_y + 1, w_txt, 6, 'F')
             self.cell(w_txt, 6, txt, 0, 1, 'C')
 
-        self.set_y(start_y + total_height + 3)
+        # Precisely lock Y to bottom border margin
+        self.set_y(start_y + total_height + 4)
 
     def draw_disclaimer(self, disc_soup):
         self.reset_state()
@@ -648,6 +705,7 @@ def parse_and_generate_pdf(html_content):
     pdf.set_auto_page_break(auto=False) 
     pdf.add_page()
 
+    # Alerts
     alert = soup.find(class_='alert-box')
     if alert:
         title = safe_get_text(alert.find(['h3', 'h4'])) or "ALERT"
@@ -655,6 +713,7 @@ def parse_and_generate_pdf(html_content):
         pdf.draw_notice_box(title + ": " + txt, style='warning')
         alert.attrs['processed'] = True
 
+    # Section 0: Market Positioning Dashboard
     dash_h2 = soup.find(lambda tag: tag.name in ['h2', 'h3'] and 'Market Positioning Dashboard' in tag.text)
     if dash_h2:
         dash_card = dash_h2.find_next('div', class_='index-card')
@@ -664,6 +723,7 @@ def parse_and_generate_pdf(html_content):
             dash_card.attrs['processed'] = True
             dash_h2.attrs['processed'] = True
 
+    # Core Navigation 
     tabs = [
         ('tab-index', "Index Analysis — EGX30", False),
         ('tab-market', "Market Trend (Internal Structure)", False),
@@ -683,29 +743,59 @@ def parse_and_generate_pdf(html_content):
         
         pdf.section_header(title, new_page=force_new_page)
         
+        # Component Scanner
         for card in tab.find_all(['div', 'p']):
             if 'processed' in card.attrs: continue
             
             c_class = card.get('class', [])
-            if card.name == 'p' and (card.parent == tab or 'section' in card.parent.get('class', [])):
+            
+            # Text Intros
+            if card.name == 'p':
+                if card.find_parent(class_=['setup-card', 'index-card', 'market-assessment', 'risk-score-box', 'watchlist', 'trade-params']):
+                    continue
                 txt = safe_get_text(card)
                 if len(txt) > 10:
                     style = 'warning' if ('reduce' in tab_id or 'Distribute' in txt or 'Note:' in txt) else 'neutral'
                     pdf.draw_notice_box(txt, style=style)
                     card.attrs['processed'] = True
-            elif 'setup-card' in c_class:
-                pdf.draw_setup_card(card, is_watchlist=('watch' in tab_id))
+                    
+            # Setup Cards & Watchlist Cards
+            elif 'setup-card' in c_class or 'watchlist-item' in c_class:
+                pdf.draw_setup_card(card, is_watchlist=('watch' in tab_id or 'watchlist' in c_class))
                 card.attrs['processed'] = True
                 for c in card.find_all(True): c.attrs['processed'] = True
+                
+            # Index Cards & Radar (Radar is handled implicitly within draw_index_card)
             elif 'index-card' in c_class:
                 pdf.draw_index_card(card)
                 card.attrs['processed'] = True
                 for c in card.find_all(True): c.attrs['processed'] = True
+                
+            # Market Assessment
             elif 'market-assessment' in c_class:
                 pdf.draw_market_assessment(card)
                 card.attrs['processed'] = True
                 for c in card.find_all(True): c.attrs['processed'] = True
+                
+            # Risk Dashboard (Old format fallback)
+            elif 'risk-score-box' in c_class:
+                data = {}
+                score_p = card.find('p', style=lambda v: v and '1.8em' in v)
+                if score_p: data['score'] = safe_get_text(score_p)
+                env_p = score_p.find_next_sibling('p') if score_p else None
+                if env_p: data['env'] = safe_get_text(env_p)
+                
+                inner_box = card.find('div', style=lambda v: v and 'rgba' in v)
+                if inner_box:
+                    ips = inner_box.find_all('p')
+                    if len(ips) > 0: data['exposure'] = safe_get_text(ips[0])
+                    if len(ips) > 1: data['allocation'] = safe_get_text(ips[1])
+                    if len(ips) > 2: data['details'] = safe_get_text(ips[2])
+                if data: pdf.draw_risk_summary_box(data)
+                card.attrs['processed'] = True
+                for c in card.find_all(True): c.attrs['processed'] = True
 
+    # Disclaimer Footer
     disclaimer = soup.find(class_='disclaimer')
     if disclaimer:
         pdf.draw_disclaimer(disclaimer)
