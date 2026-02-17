@@ -1,6 +1,6 @@
 import streamlit as st
 from fpdf import FPDF
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 import tempfile
 import re
 import math
@@ -14,7 +14,7 @@ def clean_text(text):
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '\u00A0': ' ',
         '📊': '', '📈': '', '🎯': '', '💼': '', '⚠️': '', '👀': '', '📝': '',
-        '•': '-', '\u2022': '-' # Sanitize bullet points for PDF
+        '•': '-', '\u2022': '-' 
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
@@ -57,7 +57,6 @@ class PDF(FPDF):
         self.set_xy(10, 18)
         self.cell(0, 4, self.subtitle_text, 0, 1, 'C')
         
-        # Lock cursor below header
         self.set_y(30)
 
     def footer(self):
@@ -66,7 +65,7 @@ class PDF(FPDF):
         self.rect(0, 285, 210, 12, 'F')
         self.set_font('Arial', '', 7)
         self.set_text_color(200, 200, 200)
-        self.cell(0, 8, f'BlueBerry AI Trader | Technical Analysis System | Page {self.page_no()}', 0, 0, 'C')
+        self.cell(0, 8, f'Blueberry AI Trader | Technical Analysis System | Page {self.page_no()}', 0, 0, 'C')
 
     def check_page_break(self, height_needed):
         if self.get_y() + height_needed > 280:
@@ -123,20 +122,15 @@ class PDF(FPDF):
         self.set_y(start_y + h_needed + 3)
 
     def draw_dashboard_card(self, soup):
-        """Precision renderer for the Purple Market Dashboard"""
         self.reset_state()
-        
-        # 1. Height Estimation
         h_needed = 60
         self.check_page_break(h_needed)
         start_y = self.get_y()
         
-        # 2. Outer Card Background
         self.set_fill_color(247, 243, 255)
         self.set_draw_color(230, 220, 245)
         self.rect(8, start_y, 194, h_needed, 'DF')
         
-        # 3. Header
         self.set_xy(12, start_y + 4)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(44, 62, 80)
@@ -146,7 +140,6 @@ class PDF(FPDF):
         
         curr_y = self.get_y() + 4
         
-        # 4. Top Flex Grid (4 items)
         flex_div = soup.find('div', style=lambda s: s and 'display:flex' in s.replace(' ', ''))
         if flex_div:
             boxes = flex_div.find_all(class_='param-box')
@@ -170,10 +163,12 @@ class PDF(FPDF):
                 self.set_xy(x, curr_y + 5)
                 self.set_font('Arial', 'B', 9)
                 self.set_text_color(44, 62, 80)
+                
+                if self.get_string_width(val) > box_w - 2:
+                    self.set_font('Arial', 'B', 7.5)
                 self.cell(box_w, 4, val, 0, 1, 'C')
             curr_y += 14
 
-        # 5. Middle Trade Params (Purple Background)
         params_div = soup.find(class_='trade-params')
         if params_div:
             boxes = params_div.find_all(class_='param-box')
@@ -204,7 +199,6 @@ class PDF(FPDF):
                 self.cell(box_w, 4, val, 0, 1, 'C')
             curr_y += 18
 
-        # 6. Rationale
         rat_div = soup.find(class_='rationale')
         if rat_div:
             txt = safe_get_text(rat_div)
@@ -230,7 +224,6 @@ class PDF(FPDF):
                 self.multi_cell(182, 4.2, txt, align='L')
             curr_y += h_rat + 3
             
-        # 7. Note
         note_p = soup.find('p', style=lambda s: s and 'Note:' in safe_get_text(soup))
         if note_p:
             txt = safe_get_text(note_p)
@@ -246,7 +239,6 @@ class PDF(FPDF):
                 self.multi_cell(186, 4.2, txt, align='L')
             curr_y += 6
 
-        # Adjust final box height perfectly
         self.set_fill_color(247, 243, 255)
         self.rect(8, start_y, 194, (curr_y - start_y), 'D') 
         self.set_y(curr_y + 4)
@@ -259,9 +251,11 @@ class PDF(FPDF):
         
         for child in soup.children:
             if not getattr(child, 'name', None): continue
+            
             if child.name == 'h3':
                 h_needed += 8
                 elements.append(('h3', safe_get_text(child)))
+                
             elif child.name == 'p':
                 txt = safe_get_text(child)
                 if not txt: continue
@@ -270,6 +264,7 @@ class PDF(FPDF):
                 c_class = child.get('class', [])
                 color = (39, 174, 96) if 'trend-bull' in c_class else (231, 76, 60) if 'trend-bear' in c_class else (85, 85, 85)
                 elements.append(('p', txt, color, lines))
+                
             elif child.name == 'div' and 'metric-row' in child.get('class', []):
                 h_needed += 5.5
                 lbl = safe_get_text(child.find(class_='metric-label'))
@@ -278,6 +273,14 @@ class PDF(FPDF):
                 c_class = val_node.get('class', []) if val_node else []
                 color = (39, 174, 96) if 'trend-bull' in c_class else (231, 76, 60) if 'trend-bear' in c_class else (44, 62, 80)
                 elements.append(('metric', lbl, val, color))
+                
+            # CRITICAL FIX: Add Support for lists inside Index Cards (Market Radar)
+            elif child.name in ['ul', 'ol']:
+                for li in child.find_all('li'):
+                    txt = "- " + safe_get_text(li)
+                    lines = len(self.multi_cell(182, 4.2, txt, split_only=True))
+                    h_needed += (lines * 4.2) + 2
+                    elements.append(('li', txt, (85, 85, 85), lines))
                 
         self.check_page_break(h_needed)
         start_y = self.get_y()
@@ -312,6 +315,26 @@ class PDF(FPDF):
                 self.set_draw_color(220, 220, 220)
                 self.line(12, curr_y + 5, 198, curr_y + 5)
                 curr_y += 5.5
+            elif el[0] == 'li':
+                self.set_xy(14, curr_y)
+                txt = el[1]
+                
+                # Intelligent color formatting for Radar items
+                if '+' in txt: self.set_text_color(39, 174, 96)
+                elif '-' in txt and '1-3' not in txt: self.set_text_color(231, 76, 60)
+                else: self.set_text_color(60, 60, 60)
+                
+                if ':' in txt and txt.index(':') < 15:
+                    parts = txt.split(':', 1)
+                    self.set_font('Arial', 'B', 8.5)
+                    w_prefix = self.get_string_width(parts[0] + ':') + 1
+                    self.cell(w_prefix, 4.2, parts[0] + ':', 0, 0, 'L')
+                    self.set_font('Arial', '', 8.5)
+                    self.multi_cell(0, 4.2, parts[1], align='L')
+                else:
+                    self.set_font('Arial', '', 8.5)
+                    self.multi_cell(182, 4.2, txt, align='L')
+                curr_y += (el[3] * 4.2) + 2
                 
         self.set_y(start_y + h_needed + 3)
 
@@ -347,71 +370,35 @@ class PDF(FPDF):
             
         self.set_y(start_y + h_needed + 3)
 
-    def draw_risk_summary_box(self, risk_data):
-        self.reset_state()
-        h_needed = 38 
-        self.check_page_break(h_needed)
-        start_y = self.get_y()
-        
-        self.set_fill_color(231, 76, 60)
-        self.rect(8, start_y, 194, h_needed, 'F')
-        
-        self.set_xy(8, start_y + 2)
-        self.set_font('Arial', 'B', 11)
-        self.set_text_color(255, 255, 255)
-        self.cell(194, 5, "Risk Assessment", 0, 1, 'C')
-        
-        self.set_font('Arial', 'B', 12)
-        self.cell(194, 5, clean_text(risk_data.get('score', 'Risk Score: N/A')), 0, 1, 'C')
-        self.set_font('Arial', '', 9)
-        self.cell(194, 4, clean_text(risk_data.get('env', '')), 0, 1, 'C')
-        
-        box_y = self.get_y() + 3
-        self.set_fill_color(255, 255, 255)
-        self.rect(12, box_y, 186, 16, 'F')
-        
-        self.set_xy(12, box_y + 2)
-        self.set_text_color(192, 57, 43) 
-        self.set_font('Arial', 'B', 9)
-        combo_txt = f"{clean_text(risk_data.get('exposure', ''))}  |  {clean_text(risk_data.get('allocation', ''))}"
-        self.cell(186, 4, combo_txt, 0, 1, 'C')
-        
-        self.set_xy(14, box_y + 7)
-        self.set_font('Arial', '', 7.5)
-        self.set_text_color(100, 100, 100)
-        self.multi_cell(182, 3.5, clean_text(risk_data.get('details', '')), align='C')
-        
-        self.set_y(start_y + h_needed + 2)
-
-    def draw_setup_card(self, card_soup, card_type='setup'):
-        """Universal parser for Buy, Open, Reduce, Watchlist, and Notes Cards"""
+    def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
         
-        # 1. HEADER
-        if card_type == 'watchlist':
-            title_txt = safe_get_text(card_soup.find(['h3', 'h4']))
-            if "-" in title_txt: ticker, name = title_txt.split("-", 1)
-            else: ticker, name = title_txt, ""
-            badge_txt = "WATCHLIST"
-            badge_r, badge_g, badge_b = 230, 126, 34 # Orange
+        # 1. HEADER EXTRACTION
+        header = card_soup.find(class_='setup-header')
+        if header:
+            ticker = safe_get_text(header.find(class_='ticker'))
+            badge_el = header.find(class_='setup-type')
+            badge_txt = safe_get_text(badge_el)
         else:
-            header = card_soup.find(class_='setup-header')
-            ticker = safe_get_text(header.find(class_='ticker')) if header else "ASSET"
-            badge_node = header.find(class_='setup-type') if header else None
-            badge_txt = safe_get_text(badge_node)
-            name_node = card_soup.find(class_='company-name') or card_soup.find('div', style=lambda v: v and 'color: #666' in v)
-            name = safe_get_text(name_node)
-            if ticker in name: name = name.replace(ticker, "").strip(" -|")
+            h4 = card_soup.find(['h3', 'h4'])
+            title_txt = safe_get_text(h4)
+            if "-" in title_txt: ticker = title_txt.split("-", 1)[0].strip()
+            else: ticker = title_txt
+            badge_el = None
+            badge_txt = "WATCHLIST"
+        
+        name_el = card_soup.find(class_='company-name')
+        name = safe_get_text(name_el) if name_el else ""
+        if ticker in name: name = name.replace(ticker, "").strip(" -|")
+        
+        badge_r, badge_g, badge_b = 109, 102, 204 
+        if badge_el and badge_el.has_attr('style'):
+            st_str = badge_el['style'].lower()
+            if '27ae60' in st_str or 'green' in st_str: badge_r, badge_g, badge_b = 39, 174, 96
+            elif 'e74c3c' in st_str or 'red' in st_str: badge_r, badge_g, badge_b = 231, 76, 60
             
-            badge_r, badge_g, badge_b = 109, 102, 204 # Purple Default
-            if badge_node and badge_node.has_attr('style'):
-                match = re.search(r'color:\s*(#[0-9a-fA-F]{3,6})', badge_node['style'].replace(' ', ''))
-                if match: badge_r, badge_g, badge_b = hex_to_rgb(match.group(1))
-                else:
-                    st_str = badge_node['style'].lower()
-                    if '27ae60' in st_str or 'green' in st_str: badge_r, badge_g, badge_b = 39, 174, 96
-                    elif 'e74c3c' in st_str or 'red' in st_str: badge_r, badge_g, badge_b = 231, 76, 60
-
+        if is_watchlist: badge_r, badge_g, badge_b = 230, 126, 34 
+            
         # 2. PARAMS & DETAILS
         parsed_params = []
         details_texts = []
@@ -425,18 +412,18 @@ class PDF(FPDF):
                 val = safe_get_text(val_node)
                 color = (44, 62, 80)
                 if val_node and val_node.has_attr('style'):
-                    match = re.search(r'color:\s*(#[0-9a-fA-F]{3,6})', val_node['style'].replace(' ', ''))
-                    if match: color = hex_to_rgb(match.group(1))
+                    st = val_node['style'].lower()
+                    if '27ae60' in st or 'green' in st: color = (39, 174, 96)
+                    elif 'e74c3c' in st or 'red' in st: color = (231, 76, 60)
                 parsed_params.append({'label': lbl, 'val': val, 'color': color})
                 
         for child in card_soup.find_all(['p', 'li']):
             if child.find_parent(class_=['trade-params', 'rationale', 'confidence']): continue
-            
             prefix = "- " if child.name == 'li' else ""
             txt = safe_get_text(child)
             if not txt: continue
             
-            if card_type == 'watchlist' and ('Parameters:' in txt or '|' in txt):
+            if ('Parameters:' in txt or '|' in txt) and not params_div:
                 if ':' in txt: _, txt = txt.split(':', 1)
                 for part in txt.split('|'):
                     part = part.strip()
@@ -463,19 +450,25 @@ class PDF(FPDF):
         rationale_el = card_soup.find(class_='rationale')
         confidence_el = card_soup.find(class_=lambda c: c and 'confidence' in c)
         
-        # 3. HEIGHT CALCULATION
+        # 3. HEIGHT & DYNAMIC GRID CALCULATION
         self.set_font('Arial', '', 8.5)
         h_details = sum([len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 2 for t in details_texts])
         h_extras = sum([len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 2 for t in extra_texts])
         h_rationale = (len(self.multi_cell(184, 4.2, safe_get_text(rationale_el), split_only=True)) * 4.2 + 4) if rationale_el else 0
         
+        # CRITICAL FIX: Intelligent Wrapping Grid
         params_count = len(parsed_params)
-        if params_count == 4: cols, box_w, gap = 2, 88, 4
-        elif params_count in [1, 2]: cols, box_w, gap = params_count, 88, 4
-        else: cols, box_w, gap = 3, 58, 4
-        h_params = (math.ceil(params_count / cols) * 14 + 6) if params_count > 0 else 0 
+        if params_count == 4: cols, box_w, gap = 2, 90, 4
+        elif params_count in [1, 2]: cols, box_w, gap = params_count, 90, 4
+        else: cols, box_w, gap = 3, 60, 4
+        
+        # Check if values are extremely long to expand height
+        max_val_len = max([len(p['val']) for p in parsed_params]) if parsed_params else 0
+        box_h = 16 if max_val_len > 24 else 11 
+        
+        h_params = (math.ceil(params_count / cols) * (box_h + 3) + 6) if params_count > 0 else 0 
 
-        total_height = 16 + (h_details + 3 if h_details else 0) + h_params + h_rationale + (h_extras + 2 if h_extras else 0) + (8 if confidence_el else 0) + 4
+        total_height = 14 + (h_details + 3 if h_details else 0) + h_params + h_rationale + (h_extras + 2 if h_extras else 0) + (8 if confidence_el else 0) + 4
         self.check_page_break(total_height)
         start_y = self.get_y()
         
@@ -505,8 +498,8 @@ class PDF(FPDF):
             self.cell(w_badge, 6, badge_txt, 0, 1, 'C', fill=True)
             
         self.set_draw_color(240, 240, 240)
-        self.line(10, start_y + 13, 200, start_y + 13)
-        curr_y = start_y + 15
+        self.line(10, start_y + 11, 200, start_y + 11)
+        curr_y = start_y + 13
         
         # 6. DRAW DETAILS
         if details_texts:
@@ -518,7 +511,6 @@ class PDF(FPDF):
                 self.set_xy(12, curr_y)
                 self.set_font('Arial', '', 8.5)
                 
-                # Highlight keywords
                 if 'trend-bull' in t or 'Hold' in t or 'Breakout' in t: self.set_text_color(39, 174, 96)
                 elif 'trend-bear' in t or 'Exit' in t or 'Breakdown' in t: self.set_text_color(231, 76, 60)
                 else: self.set_text_color(60, 60, 60)
@@ -535,7 +527,7 @@ class PDF(FPDF):
                 curr_y = self.get_y() + 2 
             curr_y += 1.5
 
-        # 7. DRAW PARAMS
+        # 7. DRAW PARAMS (Intelligent Wrapping Logic)
         if parsed_params:
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
@@ -547,20 +539,28 @@ class PDF(FPDF):
                 row = i // cols
                 col = i % cols
                 x = start_x + (col * (box_w + gap))
-                y = grid_y + (row * 14)
+                y = grid_y + (row * (box_h + 3))
                 
                 self.set_fill_color(255, 255, 255)
-                self.rect(x, y, box_w, 11, 'F')
+                self.rect(x, y, box_w, box_h, 'F')
                 
                 self.set_xy(x, y + 1.5)
                 self.set_font('Arial', '', 6.5)
                 self.set_text_color(100, 100, 100)
                 self.cell(box_w, 4, p_data['label'].upper(), 0, 1, 'C')
                 
-                self.set_xy(x, y + 5.5)
-                self.set_font('Arial', 'B', 9.5)
                 self.set_text_color(*p_data['color'])
-                self.cell(box_w, 5, p_data['val'], 0, 1, 'C')
+                val_txt = p_data['val']
+                
+                # Check if value overflows, and multi_cell wrap it if needed
+                self.set_font('Arial', 'B', 9.5)
+                if self.get_string_width(val_txt) > box_w - 4:
+                    self.set_font('Arial', 'B', 8)
+                    self.set_xy(x + 1, y + 6)
+                    self.multi_cell(box_w - 2, 3.8, val_txt, align='C')
+                else:
+                    self.set_xy(x, y + 5.5)
+                    self.cell(box_w, box_h - 5.5, val_txt, 0, 1, 'C')
                 
             curr_y += h_params
 
@@ -648,7 +648,6 @@ def parse_and_generate_pdf(html_content):
     pdf.set_auto_page_break(auto=False) 
     pdf.add_page()
 
-    # Generic Alerts
     alert = soup.find(class_='alert-box')
     if alert:
         title = safe_get_text(alert.find(['h3', 'h4'])) or "ALERT"
@@ -656,7 +655,6 @@ def parse_and_generate_pdf(html_content):
         pdf.draw_notice_box(title + ": " + txt, style='warning')
         alert.attrs['processed'] = True
 
-    # 1. Market Positioning Dashboard
     dash_h2 = soup.find(lambda tag: tag.name in ['h2', 'h3'] and 'Market Positioning Dashboard' in tag.text)
     if dash_h2:
         dash_card = dash_h2.find_next('div', class_='index-card')
@@ -666,7 +664,6 @@ def parse_and_generate_pdf(html_content):
             dash_card.attrs['processed'] = True
             dash_h2.attrs['processed'] = True
 
-    # 2. Core Tabs Navigation
     tabs = [
         ('tab-index', "Index Analysis — EGX30", False),
         ('tab-market', "Market Trend (Internal Structure)", False),
@@ -678,75 +675,37 @@ def parse_and_generate_pdf(html_content):
     ]
 
     for tab_id, default_title, force_new_page in tabs:
-        tab_soup = soup.find(id=tab_id)
-        if not tab_soup: continue
+        tab = soup.find(id=tab_id)
+        if not tab: continue
         
-        h2 = tab_soup.find('h2')
+        h2 = tab.find('h2')
         title = safe_get_text(h2) if h2 else default_title
-        if h2: h2.attrs['processed'] = True
         
         pdf.section_header(title, new_page=force_new_page)
         
-        processed_ids = set()
-        
-        for element in tab_soup.find_all(['div', 'p']):
-            el_id = id(element)
-            if el_id in processed_ids or 'processed' in element.attrs: continue
+        for card in tab.find_all(['div', 'p']):
+            if 'processed' in card.attrs: continue
             
-            c_class = element.get('class', [])
-            
-            if element.name == 'p' and element.parent.get('class') == ['section']:
-                txt = safe_get_text(element)
-                if len(txt) > 5:
+            c_class = card.get('class', [])
+            if card.name == 'p' and (card.parent == tab or 'section' in card.parent.get('class', [])):
+                txt = safe_get_text(card)
+                if len(txt) > 10:
                     style = 'warning' if ('reduce' in tab_id or 'Distribute' in txt or 'Note:' in txt) else 'neutral'
                     pdf.draw_notice_box(txt, style=style)
-                processed_ids.add(el_id)
-                
-            elif 'index-card' in c_class:
-                pdf.draw_index_card(element)
-                for child in element.find_all(True): processed_ids.add(id(child))
-                processed_ids.add(el_id)
-                
-            elif 'risk-score-box' in c_class:
-                data = {}
-                score_p = element.find('p', style=lambda v: v and '1.8em' in v)
-                if score_p: data['score'] = safe_get_text(score_p)
-                env_p = score_p.find_next_sibling('p') if score_p else None
-                if env_p: data['env'] = safe_get_text(env_p)
-                
-                inner_box = element.find('div', style=lambda v: v and 'rgba' in v)
-                if inner_box:
-                    ips = inner_box.find_all('p')
-                    if len(ips) > 0: data['exposure'] = safe_get_text(ips[0])
-                    if len(ips) > 1: data['allocation'] = safe_get_text(ips[1])
-                    if len(ips) > 2: data['details'] = safe_get_text(ips[2])
-                if data: pdf.draw_risk_summary_box(data)
-                for child in element.find_all(True): processed_ids.add(id(child))
-                processed_ids.add(el_id)
-                
-            elif 'market-assessment' in c_class:
-                pdf.draw_market_assessment(element)
-                for child in element.find_all(True): processed_ids.add(id(child))
-                processed_ids.add(el_id)
-                
+                    card.attrs['processed'] = True
             elif 'setup-card' in c_class:
-                pdf.draw_setup_card(element, card_type='setup')
-                for child in element.find_all(True): processed_ids.add(id(child))
-                processed_ids.add(el_id)
-                
-            elif 'watchlist' in c_class and 'watchlist-item' not in c_class:
-                intro = element.find('p', recursive=False)
-                if intro: 
-                    pdf.draw_notice_box(safe_get_text(intro))
-                    processed_ids.add(id(intro))
-                processed_ids.add(el_id)
-                
-            elif 'watchlist-item' in c_class:
-                pdf.draw_setup_card(element, card_type='watchlist')
-                for child in element.find_all(True): processed_ids.add(id(child))
-                processed_ids.add(el_id)
+                pdf.draw_setup_card(card, is_watchlist=('watch' in tab_id))
+                card.attrs['processed'] = True
+                for c in card.find_all(True): c.attrs['processed'] = True
+            elif 'index-card' in c_class:
+                pdf.draw_index_card(card)
+                card.attrs['processed'] = True
+                for c in card.find_all(True): c.attrs['processed'] = True
+            elif 'market-assessment' in c_class:
+                pdf.draw_market_assessment(card)
+                card.attrs['processed'] = True
+                for c in card.find_all(True): c.attrs['processed'] = True
 
-    # 3. Disclaimer
     disclaimer = soup.find(class_='disclaimer')
     if disclaimer:
         pdf.draw_disclaimer(disclaimer)
@@ -756,7 +715,7 @@ def parse_and_generate_pdf(html_content):
 # --- 4. STREAMLIT APP ---
 st.set_page_config(page_title="BlueberryAI Formatter", layout="centered")
 st.title("📄 BlueberryAI PDF Generator")
-st.write("Upload your HTML report to generate a pixel-perfect, completely dynamic PDF.")
+st.write("Upload your HTML report to generate a pixel-perfect styled PDF.")
 
 uploaded_file = st.file_uploader("Choose HTML file", type="html")
 
