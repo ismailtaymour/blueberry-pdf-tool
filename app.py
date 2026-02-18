@@ -273,7 +273,8 @@ class PDF(FPDF):
                 c_class = val_node.get('class', []) if val_node else []
                 color = (39, 174, 96) if 'trend-bull' in c_class else (231, 76, 60) if 'trend-bear' in c_class else (44, 62, 80)
                 elements.append(('metric', lbl, val, color))
-                
+            
+            # MARKET RADAR FIX: Handles Unordered Lists
             elif child.name in ['ul', 'ol']:
                 for li in child.find_all('li'):
                     txt = "- " + safe_get_text(li)
@@ -317,21 +318,11 @@ class PDF(FPDF):
             elif el[0] == 'li':
                 self.set_xy(14, curr_y)
                 txt = el[1]
-                
                 if '+' in txt: self.set_text_color(39, 174, 96)
                 elif '-' in txt and '1-3' not in txt: self.set_text_color(231, 76, 60)
                 else: self.set_text_color(60, 60, 60)
-                
-                if ':' in txt and txt.index(':') < 15:
-                    parts = txt.split(':', 1)
-                    self.set_font('Arial', 'B', 8.5)
-                    w_prefix = self.get_string_width(parts[0] + ':') + 1
-                    self.cell(w_prefix, 4.2, parts[0] + ':', 0, 0, 'L')
-                    self.set_font('Arial', '', 8.5)
-                    self.multi_cell(0, 4.2, parts[1], align='L')
-                else:
-                    self.set_font('Arial', '', 8.5)
-                    self.multi_cell(182, 4.2, txt, align='L')
+                self.set_font('Arial', '', 8.5)
+                self.multi_cell(182, 4.2, txt, align='L')
                 curr_y += (el[2] * 4.2) + 2
                 
         self.set_y(start_y + h_needed + 3)
@@ -407,7 +398,7 @@ class PDF(FPDF):
     def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
         
-        # HEADER EXTRACTION
+        # 1. HEADER EXTRACTION
         header = card_soup.find(class_='setup-header')
         if header:
             ticker = safe_get_text(header.find(class_='ticker'))
@@ -433,7 +424,7 @@ class PDF(FPDF):
             
         if is_watchlist: badge_r, badge_g, badge_b = 230, 126, 34 
             
-        # PARAMS & DETAILS
+        # 2. PARAMS & DETAILS
         parsed_params = []
         details_texts = []
         extra_texts = []
@@ -485,7 +476,7 @@ class PDF(FPDF):
         rationale_el = card_soup.find(class_='rationale')
         confidence_el = card_soup.find(class_=lambda c: c and 'confidence' in c)
         
-        # EXACT HEIGHT & WRAPPING GRID CALCULATION
+        # 3. HEIGHT & DYNAMIC GRID CALCULATION
         self.set_font('Arial', '', 8.5)
         
         h_details = 0
@@ -516,9 +507,13 @@ class PDF(FPDF):
             for c in range(cols):
                 idx = r * cols + c
                 if idx < params_count:
-                    lines = len(self.multi_cell(box_w - 4, 3.8, parsed_params[idx]['val'], split_only=True))
+                    # Calculate how many lines this specific value needs
+                    val_text = parsed_params[idx]['val']
+                    # We use a slightly smaller width to account for padding
+                    lines = len(self.multi_cell(box_w - 4, 3.5, val_text, split_only=True))
                     if lines > max_lines: max_lines = lines
-            row_heights.append((max_lines * 3.8) + 8) 
+            # Row height = Top Padding + (Lines * Line Height) + Bottom Padding + Label Height
+            row_heights.append(4 + (max_lines * 3.8) + 4) 
             
         h_params = sum(row_heights) + (len(row_heights) * 2) + 4 if params_count > 0 else 0
 
@@ -527,12 +522,12 @@ class PDF(FPDF):
         self.check_page_break(total_height)
         start_y = self.get_y()
         
-        # DRAW BG
+        # 4. DRAW BG
         self.set_fill_color(255, 255, 255)
         self.set_draw_color(230, 230, 230)
         self.rect(8, start_y, 194, total_height, 'DF')
         
-        # DRAW HEADER
+        # 5. DRAW HEADER
         self.set_xy(12, start_y + 3)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(44, 62, 80)
@@ -556,7 +551,7 @@ class PDF(FPDF):
         self.line(10, start_y + 11, 200, start_y + 11)
         curr_y = start_y + 13
         
-        # DRAW DETAILS
+        # 6. DRAW DETAILS
         if details_texts:
             self.set_fill_color(248, 249, 250)
             self.rect(10, curr_y, 190, h_details, 'F')
@@ -579,10 +574,10 @@ class PDF(FPDF):
                     self.multi_cell(0, 4.2, parts[1], align='L')
                 else:
                     self.multi_cell(186, 4.2, t, align='L')
-                curr_y = self.get_y() + 2 
+                curr_y += 4.2 + 2 
             curr_y += 1.5
 
-        # DRAW PARAMS (Dynamic Text Wrapping Engine)
+        # 7. DRAW PARAMS (Dynamic Text Wrapping Engine)
         if parsed_params:
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
@@ -601,7 +596,7 @@ class PDF(FPDF):
                     y = grid_y
                     
                     self.set_fill_color(255, 255, 255)
-                    self.rect(x, y, box_w, row_h, 'F')
+                    self.rect(x, y, box_w, row_h - 2, 'F')
                     
                     self.set_xy(x, y + 1.5)
                     self.set_font('Arial', '', 6.5)
@@ -617,7 +612,7 @@ class PDF(FPDF):
                 
             curr_y += h_params
 
-        # DRAW RATIONALE
+        # 8. DRAW RATIONALE
         if rationale_el:
             self.set_fill_color(232, 244, 248) 
             self.rect(10, curr_y, 190, h_rationale, 'F')
@@ -630,7 +625,7 @@ class PDF(FPDF):
             self.multi_cell(184, 4.2, safe_get_text(rationale_el), align='L')
             curr_y += h_rationale
 
-        # DRAW EXTRAS
+        # 9. DRAW EXTRAS
         if extra_texts:
             curr_y += 1
             self.set_font('Arial', 'B', 8.5)
@@ -638,9 +633,9 @@ class PDF(FPDF):
             for t in extra_texts:
                 self.set_xy(12, curr_y)
                 self.multi_cell(186, 4.2, t, align='L')
-                curr_y = self.get_y() + 1
+                curr_y += 4.2 + 1
 
-        # DRAW CONFIDENCE
+        # 10. DRAW CONFIDENCE
         if confidence_el:
             txt = safe_get_text(confidence_el)
             c_class = confidence_el.get('class', [])
@@ -653,9 +648,9 @@ class PDF(FPDF):
             self.set_text_color(*text_c)
             self.set_font('Arial', 'B', 8)
             
-            self.set_xy(10, curr_y + 1)
+            self.set_xy(12, curr_y + 1)
             w_txt = self.get_string_width(txt) + 8
-            self.rect(10, curr_y + 1, w_txt, 6, 'F')
+            self.rect(12, curr_y + 1, w_txt, 6, 'F')
             self.cell(w_txt, 6, txt, 0, 1, 'C')
 
         self.set_y(start_y + total_height + 4)
