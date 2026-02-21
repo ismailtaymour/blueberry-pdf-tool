@@ -274,11 +274,20 @@ class PDF(FPDF):
                 color = (39, 174, 96) if 'trend-bull' in c_class else (231, 76, 60) if 'trend-bear' in c_class else (44, 62, 80)
                 elements.append(('metric', lbl, val, color))
             
-            # MARKET RADAR FIX: Handles Unordered Lists
+            # MARKET RADAR LIST SUPPORT
             elif child.name in ['ul', 'ol']:
                 for li in child.find_all('li'):
                     txt = "- " + safe_get_text(li)
-                    lines = len(self.multi_cell(182, 4.2, txt, split_only=True))
+                    # Use hanging indent math for precise estimation
+                    if ':' in txt and txt.index(':') < 20:
+                        parts = txt.split(':', 1)
+                        self.set_font('Arial', 'B', 8.5)
+                        w_pref = self.get_string_width(parts[0] + ':')
+                        self.set_font('Arial', '', 8.5)
+                        w_avail = 198 - 14 - w_pref
+                        lines = len(self.multi_cell(w_avail, 4.2, " " + parts[1].lstrip(), split_only=True))
+                    else:
+                        lines = len(self.multi_cell(182, 4.2, txt, split_only=True))
                     h_needed += (lines * 4.2) + 2
                     elements.append(('li', txt, lines))
                 
@@ -316,14 +325,37 @@ class PDF(FPDF):
                 self.line(12, curr_y + 5, 198, curr_y + 5)
                 curr_y += 5.5
             elif el[0] == 'li':
-                self.set_xy(14, curr_y)
                 txt = el[1]
-                if '+' in txt: self.set_text_color(39, 174, 96)
-                elif '-' in txt and '1-3' not in txt: self.set_text_color(231, 76, 60)
+                
+                # Intelligent Regex Color Parser
+                if re.search(r'\+\d+\.?\d*%', txt): self.set_text_color(39, 174, 96)
+                elif re.search(r'-\d+\.?\d*%', txt): self.set_text_color(231, 76, 60)
                 else: self.set_text_color(60, 60, 60)
-                self.set_font('Arial', '', 8.5)
-                self.multi_cell(182, 4.2, txt, align='L')
-                curr_y += (el[2] * 4.2) + 2
+                
+                # Hanging Indent Execution
+                if ':' in txt and txt.index(':') < 20:
+                    parts = txt.split(':', 1)
+                    prefix = parts[0] + ':'
+                    suffix = " " + parts[1].lstrip()
+                    
+                    self.set_font('Arial', 'B', 8.5)
+                    w_prefix = self.get_string_width(prefix)
+                    
+                    self.set_xy(14, curr_y)
+                    self.cell(w_prefix, 4.2, prefix, 0, 0, 'L')
+                    
+                    orig_margin = self.l_margin
+                    self.set_left_margin(14 + w_prefix)
+                    self.set_xy(14 + w_prefix, curr_y)
+                    self.set_font('Arial', '', 8.5)
+                    self.multi_cell(198 - 14 - w_prefix, 4.2, suffix, align='L')
+                    self.set_left_margin(orig_margin)
+                else:
+                    self.set_xy(14, curr_y)
+                    self.set_font('Arial', '', 8.5)
+                    self.multi_cell(182, 4.2, txt, align='L')
+                    
+                curr_y = self.get_y() + 2
                 
         self.set_y(start_y + h_needed + 3)
 
@@ -423,6 +455,8 @@ class PDF(FPDF):
             elif 'e74c3c' in st_str or 'red' in st_str: badge_r, badge_g, badge_b = 231, 76, 60
             
         if is_watchlist: badge_r, badge_g, badge_b = 230, 126, 34 
+        
+        is_radar = 'Radar' in ticker or 'Behavioral' in badge_txt
             
         # 2. PARAMS & DETAILS
         parsed_params = []
@@ -476,14 +510,23 @@ class PDF(FPDF):
         rationale_el = card_soup.find(class_='rationale')
         confidence_el = card_soup.find(class_=lambda c: c and 'confidence' in c)
         
-        # 3. HEIGHT & DYNAMIC GRID CALCULATION
+        # 3. EXACT HEIGHT & WRAPPING GRID CALCULATION
         self.set_font('Arial', '', 8.5)
         
         h_details = 0
         if details_texts:
             h_details += 3
             for t in details_texts:
-                h_details += len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 2
+                if ':' in t and t.index(':') < 30:
+                    parts = t.split(':', 1)
+                    self.set_font('Arial', 'B', 8.5)
+                    w_pref = self.get_string_width(parts[0] + ':')
+                    w_avail = 198 - 12 - w_pref
+                    self.set_font('Arial', '', 8.5)
+                    lines = len(self.multi_cell(w_avail, 4.2, " " + parts[1].lstrip(), split_only=True))
+                else:
+                    lines = len(self.multi_cell(186, 4.2, t, split_only=True))
+                h_details += (lines * 4.2) + 2
             h_details += 1.5
             
         h_extras = 0
@@ -494,7 +537,7 @@ class PDF(FPDF):
                 
         h_rationale = (len(self.multi_cell(184, 4.2, safe_get_text(rationale_el), split_only=True)) * 4.2 + 4) if rationale_el else 0
         
-        # DYNAMIC GRID WRAPPING
+        # DYNAMIC GRID WRAPPING FIX
         params_count = len(parsed_params)
         if params_count == 4: cols, box_w, gap = 2, 90, 4
         elif params_count in [1, 2]: cols, box_w, gap = params_count, 90, 4
@@ -507,12 +550,12 @@ class PDF(FPDF):
             for c in range(cols):
                 idx = r * cols + c
                 if idx < params_count:
-                    # Calculate how many lines this specific value needs
                     val_text = parsed_params[idx]['val']
-                    # We use a slightly smaller width to account for padding
-                    lines = len(self.multi_cell(box_w - 4, 3.5, val_text, split_only=True))
+                    self.set_font('Arial', 'B', 8.5)
+                    # Width available is slightly less than box width
+                    lines = len(self.multi_cell(box_w - 4, 3.8, val_text, split_only=True))
                     if lines > max_lines: max_lines = lines
-            # Row height = Top Padding + (Lines * Line Height) + Bottom Padding + Label Height
+            # Row height = 4mm top pad + lines + 4mm bottom pad
             row_heights.append(4 + (max_lines * 3.8) + 4) 
             
         h_params = sum(row_heights) + (len(row_heights) * 2) + 4 if params_count > 0 else 0
@@ -551,7 +594,7 @@ class PDF(FPDF):
         self.line(10, start_y + 11, 200, start_y + 11)
         curr_y = start_y + 13
         
-        # 6. DRAW DETAILS
+        # 6. DRAW DETAILS (With Hanging Indent & Regex Color Logic)
         if details_texts:
             self.set_fill_color(248, 249, 250)
             self.rect(10, curr_y, 190, h_details, 'F')
@@ -561,23 +604,41 @@ class PDF(FPDF):
                 self.set_xy(12, curr_y)
                 self.set_font('Arial', '', 8.5)
                 
-                if 'trend-bull' in t or 'Hold' in t or 'Breakout' in t: self.set_text_color(39, 174, 96)
-                elif 'trend-bear' in t or 'Exit' in t or 'Breakdown' in t: self.set_text_color(231, 76, 60)
-                else: self.set_text_color(60, 60, 60)
+                if is_radar:
+                    if re.search(r'\+\d+\.?\d*%', t): self.set_text_color(39, 174, 96)
+                    elif re.search(r'-\d+\.?\d*%', t): self.set_text_color(231, 76, 60)
+                    else: self.set_text_color(60, 60, 60)
+                else:
+                    if 'trend-bull' in t or 'Hold' in t or 'Breakout' in t: self.set_text_color(39, 174, 96)
+                    elif 'trend-bear' in t or 'Exit' in t or 'Breakdown' in t: self.set_text_color(231, 76, 60)
+                    else: self.set_text_color(60, 60, 60)
                 
+                # Hanging Indent
                 if ':' in t and t.index(':') < 30:
                     parts = t.split(':', 1)
+                    prefix = parts[0] + ':'
+                    suffix = " " + parts[1].lstrip()
+                    
                     self.set_font('Arial', 'B', 8.5)
-                    w_prefix = self.get_string_width(parts[0] + ':') + 1
-                    self.cell(w_prefix, 4.2, parts[0] + ':', 0, 0, 'L')
+                    w_prefix = self.get_string_width(prefix)
+                    
+                    self.set_xy(12, curr_y)
+                    self.cell(w_prefix, 4.2, prefix, 0, 0, 'L')
+                    
+                    orig_margin = self.l_margin
+                    self.set_left_margin(12 + w_prefix)
+                    self.set_xy(12 + w_prefix, curr_y)
                     self.set_font('Arial', '', 8.5)
-                    self.multi_cell(0, 4.2, parts[1], align='L')
+                    self.multi_cell(198 - 12 - w_prefix, 4.2, suffix, align='L')
+                    self.set_left_margin(orig_margin)
                 else:
+                    self.set_xy(12, curr_y)
                     self.multi_cell(186, 4.2, t, align='L')
-                curr_y += 4.2 + 2 
+                    
+                curr_y = self.get_y() + 2 
             curr_y += 1.5
 
-        # 7. DRAW PARAMS (Dynamic Text Wrapping Engine)
+        # 7. DRAW PARAMS (Dynamic Row Expansion)
         if parsed_params:
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
@@ -735,7 +796,7 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header(title, new_page=force_new_page)
         
         processed_ids = set()
-        cards_on_page = 0 # TWO CARDS PER PAGE TRACKER
+        cards_on_page = 0 
         
         for element in tab_soup.find_all(['div', 'p']):
             el_id = id(element)
@@ -761,7 +822,6 @@ def parse_and_generate_pdf(html_content):
                 processed_ids.add(el_id)
                 
             elif 'setup-card' in c_class or 'watchlist-item' in c_class:
-                # ENFORCE EXACTLY 2 CARDS PER PAGE MAXIMUM
                 if cards_on_page >= 2:
                     pdf.add_page()
                     pdf.set_y(30)
@@ -775,7 +835,6 @@ def parse_and_generate_pdf(html_content):
                 pdf.draw_setup_card(element, is_watchlist=('watch' in tab_id or 'watchlist' in c_class))
                 end_page = pdf.page_no()
                 
-                # If the card was too big and forced its own page break, it resets to the 1st card of that new page
                 if end_page > start_page:
                     cards_on_page = 1
                 else:
