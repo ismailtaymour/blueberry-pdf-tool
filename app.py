@@ -68,7 +68,7 @@ class PDF(FPDF):
         self.rect(0, 285, 210, 12, 'F')
         self.set_font('Arial', '', 7)
         self.set_text_color(200, 200, 200)
-        self.cell(0, 8, f'BlueBerry AI Trader | Technical Analysis System | Page {self.page_no()}', 0, 0, 'C')
+        self.cell(0, 8, f'Blueberry AI Trader | Technical Analysis System | Page {self.page_no()}', 0, 0, 'C')
 
     def check_page_break(self, height_needed):
         if self.get_y() + height_needed > 280:
