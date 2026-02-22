@@ -37,8 +37,9 @@ class PDF(FPDF):
         self.subtitle_text = subtitle_text
 
     def header(self):
+        # Increased header height to 32 to accommodate multi-line subtitle wrapping
         self.set_fill_color(44, 62, 80)
-        self.rect(0, 0, 210, 26, 'F') 
+        self.rect(0, 0, 210, 32, 'F') 
         
         self.set_font('Arial', 'B', 15) 
         self.set_text_color(255, 255, 255)
@@ -52,12 +53,14 @@ class PDF(FPDF):
         self.set_draw_color(100, 110, 120)
         self.line(40, 16, 170, 16) 
         
+        # Multi-cell wrapper fixes the off-page text cutoff
         self.set_font('Arial', '', 7.5)
         self.set_text_color(200, 200, 200)
         self.set_xy(10, 18)
-        self.cell(0, 4, self.subtitle_text, 0, 1, 'C')
+        self.multi_cell(190, 4, self.subtitle_text, align='C')
         
-        self.set_y(30)
+        # Lock cursor safely below the expanded header
+        self.set_y(34)
 
     def footer(self):
         self.set_y(-12) 
@@ -65,12 +68,12 @@ class PDF(FPDF):
         self.rect(0, 285, 210, 12, 'F')
         self.set_font('Arial', '', 7)
         self.set_text_color(200, 200, 200)
-        self.cell(0, 8, f'Blueberry AI Trader | Technical Analysis System | Page {self.page_no()}', 0, 0, 'C')
+        self.cell(0, 8, f'BlueBerry AI Trader | Technical Analysis System | Page {self.page_no()}', 0, 0, 'C')
 
     def check_page_break(self, height_needed):
         if self.get_y() + height_needed > 280:
             self.add_page()
-            self.set_y(30)
+            self.set_y(34)
 
     def reset_state(self):
         self.set_left_margin(8) 
@@ -80,12 +83,12 @@ class PDF(FPDF):
 
     def section_header(self, title, new_page=False):
         self.reset_state()
-        if new_page and self.get_y() > 35: 
+        if new_page and self.get_y() > 40: 
             self.add_page()
-            self.set_y(30)
+            self.set_y(34)
         elif self.get_y() > 260: 
             self.add_page()
-            self.set_y(30)
+            self.set_y(34)
             
         self.ln(3)
         color = (155, 89, 182) if "Dashboard" in title else (52, 152, 219)
@@ -123,143 +126,125 @@ class PDF(FPDF):
 
     def draw_dashboard_card(self, soup):
         self.reset_state()
-        
-        # Parse Top Row
-        top_items = []
-        dash_row = soup.find(class_='dash-row')
-        if dash_row:
-            boxes = dash_row.find_all(class_='dash-box')
-            for b in boxes:
-                lbl = safe_get_text(b.find(class_='dash-label'))
-                val_node = b.find(class_='dash-value')
-                val = safe_get_text(val_node)
-                color = (44, 62, 80)
-                if val_node and val_node.has_attr('style'):
-                    match = re.search(r'color:\s*(#[0-9a-fA-F]{3,6})', val_node['style'].replace(' ', ''))
-                    if match: color = hex_to_rgb(match.group(1))
-                top_items.append({'label': lbl, 'val': val, 'color': color})
-                
-        # Parse Bottom Row
-        bottom_items = []
-        count_row = soup.find(class_='count-row')
-        if count_row:
-            boxes = count_row.find_all(class_='count-box')
-            for b in boxes:
-                lbl = safe_get_text(b.find(class_='dash-label'))
-                val = safe_get_text(b.find(class_='dash-value'))
-                bottom_items.append({'label': lbl, 'val': val})
-                
-        # Parse Rationale & Notes
-        rat_node = soup.find(class_=['interp', 'rationale'])
-        rat_txt = safe_get_text(rat_node)
-        
-        note_p = soup.find('p', string=lambda s: s and 'Note:' in s)
-        note_txt = safe_get_text(note_p)
-
-        self.set_font('Arial', '', 8.5)
-        h_rat = (len(self.multi_cell(180, 4.2, rat_txt, split_only=True)) * 4.2 + 4) if rat_txt else 0
-        h_note = (len(self.multi_cell(186, 4.2, note_txt, split_only=True)) * 4.2 + 2) if note_txt else 0
-        
-        h_needed = 16
-        if top_items: h_needed += 15
-        if bottom_items: h_needed += 17
-        if h_rat: h_needed += h_rat + 3
-        if h_note: h_needed += h_note + 4
-        
+        h_needed = 60
         self.check_page_break(h_needed)
         start_y = self.get_y()
         
-        # Draw Background
         self.set_fill_color(247, 243, 255)
         self.set_draw_color(230, 220, 245)
         self.rect(8, start_y, 194, h_needed, 'DF')
         
         self.set_xy(12, start_y + 4)
         self.set_font('Arial', 'B', 12)
-        self.set_text_color(91, 44, 131)
+        self.set_text_color(44, 62, 80)
         self.cell(0, 6, "Internal Market Map", 0, 1, 'L')
         self.set_draw_color(155, 89, 182)
         self.line(12, self.get_y(), 198, self.get_y())
         
         curr_y = self.get_y() + 4
         
-        if top_items:
-            cols = len(top_items)
-            box_w = min(44, (186 - (cols-1)*3) / cols) if cols > 0 else 44
-            gap = (186 - (box_w * cols)) / (cols - 1) if cols > 1 else 0
-            for i, item in enumerate(top_items):
-                x = 12 + i * (box_w + gap)
+        flex_div = soup.find('div', style=lambda s: s and 'display:flex' in s.replace(' ', ''))
+        if flex_div:
+            boxes = flex_div.find_all(class_='param-box')
+            box_w = 44
+            gap = 3
+            start_x = 12
+            for i, box in enumerate(boxes):
+                if i >= 4: break
+                x = start_x + (i * (box_w + gap))
                 self.set_fill_color(255, 255, 255)
-                self.rect(x, curr_y, box_w, 11, 'F')
+                self.rect(x, curr_y, box_w, 10, 'F')
                 
-                self.set_xy(x, curr_y + 1.5)
+                lbl = safe_get_text(box.find(class_='param-label'))
+                val = safe_get_text(box.find(class_='param-value'))
+                
+                self.set_xy(x, curr_y + 1)
                 self.set_font('Arial', '', 6)
-                self.set_text_color(119, 119, 119)
-                self.cell(box_w, 4, item['label'].upper(), 0, 1, 'C')
+                self.set_text_color(100, 100, 100)
+                self.cell(box_w, 4, lbl, 0, 1, 'C')
                 
-                self.set_xy(x, curr_y + 5.5)
+                self.set_xy(x, curr_y + 5)
                 self.set_font('Arial', 'B', 9)
-                self.set_text_color(*item['color'])
-                self.cell(box_w, 5, item['val'], 0, 1, 'C')
-            curr_y += 15
-            
-        if bottom_items:
+                self.set_text_color(44, 62, 80)
+                
+                if self.get_string_width(val) > box_w - 2:
+                    self.set_font('Arial', 'B', 7.5)
+                self.cell(box_w, 4, val, 0, 1, 'C')
+            curr_y += 14
+
+        params_div = soup.find(class_='trade-params')
+        if params_div:
+            boxes = params_div.find_all(class_='param-box')
             self.set_fill_color(142, 68, 173) 
             self.rect(12, curr_y, 186, 14, 'F')
             
-            cols = len(bottom_items)
-            box_w = min(58, (186 - (cols+1)*4) / cols) if cols > 0 else 58
-            gap = (186 - (box_w * cols)) / (cols + 1) if cols > 0 else 4
-            for i, item in enumerate(bottom_items):
-                x = 12 + gap + i * (box_w + gap)
+            box_w = 58
+            gap = 4
+            start_x = 12 + (186 - (3*box_w + 2*gap))/2
+            
+            for i, box in enumerate(boxes):
+                if i >= 3: break
+                x = start_x + (i * (box_w + gap))
                 self.set_fill_color(255, 255, 255)
                 self.rect(x, curr_y + 2, box_w, 10, 'F')
+                
+                lbl = safe_get_text(box.find(class_='param-label'))
+                val = safe_get_text(box.find(class_='param-value'))
                 
                 self.set_xy(x, curr_y + 3)
                 self.set_font('Arial', '', 6)
                 self.set_text_color(100, 100, 100)
-                self.cell(box_w, 4, item['label'].upper(), 0, 1, 'C')
+                self.cell(box_w, 4, lbl, 0, 1, 'C')
                 
                 self.set_xy(x, curr_y + 7)
                 self.set_font('Arial', 'B', 9)
                 self.set_text_color(44, 62, 80)
-                self.cell(box_w, 4, item['val'], 0, 1, 'C')
-            curr_y += 17
+                self.cell(box_w, 4, val, 0, 1, 'C')
+            curr_y += 18
+
+        rat_div = soup.find(class_='rationale')
+        if rat_div:
+            txt = safe_get_text(rat_div)
+            lines = len(self.multi_cell(178, 4.2, txt, split_only=True))
+            h_rat = (lines * 4.2) + 4
             
-        if rat_txt:
             self.set_fill_color(243, 235, 248) 
             self.rect(12, curr_y, 186, h_rat, 'F')
             self.set_fill_color(155, 89, 182)
-            self.rect(12, curr_y, 1.5, h_rat, 'F')
+            self.rect(12, curr_y, 2, h_rat, 'F')
             
             self.set_xy(16, curr_y + 2)
             self.set_font('Arial', '', 8.5)
-            self.set_text_color(74, 35, 90)
+            self.set_text_color(44, 62, 80)
             
-            if 'Interpretation:' in rat_txt:
+            if 'Interpretation:' in txt:
                 self.set_font('Arial', 'B', 8.5)
-                w_prefix = self.get_string_width('Interpretation:') + 1
-                self.cell(w_prefix, 4.2, 'Interpretation:', 0, 0, 'L')
+                self.cell(24, 4.2, 'Interpretation:', 0, 0, 'L')
                 self.set_font('Arial', 'I', 8.5)
-                self.multi_cell(182 - w_prefix, 4.2, " " + rat_txt.replace('Interpretation:', '').strip(), align='L')
+                self.multi_cell(158, 4.2, txt.replace('Interpretation:', '').strip(), align='L')
             else:
                 self.set_font('Arial', 'I', 8.5)
-                self.multi_cell(182, 4.2, rat_txt, align='L')
+                self.multi_cell(182, 4.2, txt, align='L')
             curr_y += h_rat + 3
             
-        if note_txt:
+        note_p = soup.find('p', style=lambda s: s and 'Note:' in safe_get_text(soup))
+        if note_p:
+            txt = safe_get_text(note_p)
             self.set_xy(12, curr_y)
             self.set_font('Arial', 'B', 8)
-            self.set_text_color(119, 119, 119)
-            if 'Note:' in note_txt:
+            self.set_text_color(100, 100, 100)
+            if 'Note:' in txt:
                 self.cell(10, 4.2, 'Note:', 0, 0, 'L')
                 self.set_font('Arial', '', 8)
-                self.multi_cell(175, 4.2, note_txt.replace('Note:', '').strip(), align='L')
+                self.multi_cell(175, 4.2, txt.replace('Note:', '').strip(), align='L')
             else:
                 self.set_font('Arial', '', 8)
-                self.multi_cell(186, 4.2, note_txt, align='L')
+                self.multi_cell(186, 4.2, txt, align='L')
+            curr_y = self.get_y() + 2
 
-        self.set_y(start_y + h_needed + 3)
+        self.set_fill_color(247, 243, 255)
+        self.rect(8, start_y, 194, (curr_y - start_y), 'D') 
+        self.set_y(curr_y + 4)
 
     def draw_index_card(self, soup):
         self.reset_state()
@@ -291,6 +276,21 @@ class PDF(FPDF):
                 c_class = val_node.get('class', []) if val_node else []
                 color = (39, 174, 96) if 'trend-bull' in c_class else (231, 76, 60) if 'trend-bear' in c_class else (44, 62, 80)
                 elements.append(('metric', lbl, val, color))
+            
+            elif child.name in ['ul', 'ol']:
+                for li in child.find_all('li'):
+                    txt = "- " + safe_get_text(li)
+                    if ':' in txt and txt.index(':') < 20:
+                        parts = txt.split(':', 1)
+                        self.set_font('Arial', 'B', 8.5)
+                        w_pref = self.get_string_width(parts[0] + ':')
+                        self.set_font('Arial', '', 8.5)
+                        w_avail = 198 - 14 - w_pref
+                        lines = len(self.multi_cell(w_avail, 4.2, " " + parts[1].lstrip(), split_only=True))
+                    else:
+                        lines = len(self.multi_cell(182, 4.2, txt, split_only=True))
+                    h_needed += (lines * 4.2) + 2
+                    elements.append(('li', txt, lines))
                 
         self.check_page_break(h_needed)
         start_y = self.get_y()
@@ -314,7 +314,7 @@ class PDF(FPDF):
                 self.set_font('Arial', 'B' if 'Strong' in el[1] or 'Bullish' in el[1] else '', 8.5)
                 self.set_text_color(*el[2])
                 self.multi_cell(186, 4.2, el[1], align='L')
-                curr_y += (el[3] * 4.2) + 2
+                curr_y = self.get_y() + 2
             elif el[0] == 'metric':
                 self.set_xy(12, curr_y)
                 self.set_font('Arial', 'B', 8.5)
@@ -325,6 +325,31 @@ class PDF(FPDF):
                 self.set_draw_color(220, 220, 220)
                 self.line(12, curr_y + 5, 198, curr_y + 5)
                 curr_y += 5.5
+            elif el[0] == 'li':
+                txt = el[1]
+                if re.search(r'\+\d+\.?\d*%', txt): self.set_text_color(39, 174, 96)
+                elif re.search(r'-\d+\.?\d*%', txt): self.set_text_color(231, 76, 60)
+                else: self.set_text_color(60, 60, 60)
+                
+                if ':' in txt and txt.index(':') < 15:
+                    parts = txt.split(':', 1)
+                    prefix = parts[0] + ':'
+                    suffix = " " + parts[1].lstrip()
+                    self.set_font('Arial', 'B', 8.5)
+                    w_prefix = self.get_string_width(prefix)
+                    self.set_xy(14, curr_y)
+                    self.cell(w_prefix, 4.2, prefix, 0, 0, 'L')
+                    orig_margin = self.l_margin
+                    self.set_left_margin(14 + w_prefix)
+                    self.set_xy(14 + w_prefix, curr_y)
+                    self.set_font('Arial', '', 8.5)
+                    self.multi_cell(198 - 14 - w_prefix, 4.2, suffix, align='L')
+                    self.set_left_margin(orig_margin)
+                else:
+                    self.set_xy(14, curr_y)
+                    self.set_font('Arial', '', 8.5)
+                    self.multi_cell(182, 4.2, txt, align='L')
+                curr_y = self.get_y() + 2
                 
         self.set_y(start_y + h_needed + 3)
 
@@ -363,6 +388,7 @@ class PDF(FPDF):
     def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
         
+        # 1. HEADER EXTRACTION
         header = card_soup.find(class_='setup-header')
         if header:
             ticker = safe_get_text(header.find(class_='ticker'))
@@ -390,6 +416,7 @@ class PDF(FPDF):
         
         is_radar = 'Radar' in ticker or 'Behavioral' in badge_txt
             
+        # 2. PARAMS & DETAILS
         parsed_params = []
         details_texts = []
         extra_texts = []
@@ -408,7 +435,9 @@ class PDF(FPDF):
                 parsed_params.append({'label': lbl, 'val': val, 'color': color})
                 
         for child in card_soup.find_all(['p', 'li']):
-            if child.find_parent(class_=['trade-params', 'rationale', 'confidence']): continue
+            if child.find_parent(class_=['trade-params', 'rationale', 'confidence', 'coverage-table']) or child.find_parent('table'): 
+                continue
+                
             prefix = "- " if child.name == 'li' else ""
             txt = safe_get_text(child)
             if not txt: continue
@@ -441,7 +470,7 @@ class PDF(FPDF):
         rationale_el = card_soup.find(class_='rationale')
         confidence_el = card_soup.find(class_=lambda c: c and 'confidence' in c)
         
-        # EXACT HEIGHT & WRAPPING GRID CALCULATION
+        # 3. EXACT HEIGHT & WRAPPING GRID CALCULATION
         self.set_font('Arial', '', 8.5)
         
         h_details = 0
@@ -464,8 +493,7 @@ class PDF(FPDF):
         if extra_texts:
             h_extras += 1
             for t in extra_texts:
-                lines = len(self.multi_cell(186, 4.2, t, split_only=True))
-                h_extras += (lines * 4.2) + 1
+                h_extras += len(self.multi_cell(186, 4.2, t, split_only=True)) * 4.2 + 1
                 
         h_rationale = (len(self.multi_cell(184, 4.2, safe_get_text(rationale_el), split_only=True)) * 4.2 + 4) if rationale_el else 0
         
@@ -494,12 +522,12 @@ class PDF(FPDF):
         self.check_page_break(total_height)
         start_y = self.get_y()
         
-        # DRAW BG
+        # 4. DRAW BG
         self.set_fill_color(255, 255, 255)
         self.set_draw_color(230, 230, 230)
         self.rect(8, start_y, 194, total_height, 'DF')
         
-        # DRAW HEADER
+        # 5. DRAW HEADER
         self.set_xy(12, start_y + 3)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(44, 62, 80)
@@ -523,7 +551,7 @@ class PDF(FPDF):
         self.line(10, start_y + 11, 200, start_y + 11)
         curr_y = start_y + 13
         
-        # DRAW DETAILS (Hanging Indents & Regex Color)
+        # 6. DRAW DETAILS
         if details_texts:
             self.set_fill_color(248, 249, 250)
             self.rect(10, curr_y, 190, h_details, 'F')
@@ -568,7 +596,7 @@ class PDF(FPDF):
                     
             curr_y = start_y + 13 + h_details + 1.5
 
-        # DRAW PARAMS (Dynamic Text Wrapping Engine)
+        # 7. DRAW PARAMS (Dynamic Text Wrapping Engine)
         if parsed_params:
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
@@ -603,7 +631,7 @@ class PDF(FPDF):
                 
             curr_y += h_params
 
-        # DRAW RATIONALE
+        # 8. DRAW RATIONALE
         if rationale_el:
             self.set_fill_color(232, 244, 248) 
             self.rect(10, curr_y, 190, h_rationale, 'F')
@@ -616,7 +644,7 @@ class PDF(FPDF):
             self.multi_cell(184, 4.2, safe_get_text(rationale_el), align='L')
             curr_y += h_rationale
 
-        # DRAW EXTRAS (Uses get_y to prevent overlap)
+        # 9. DRAW EXTRAS (Uses get_y() to prevent overlapping Confidence badge)
         if extra_texts:
             curr_y += 1
             self.set_font('Arial', 'B', 8.5)
@@ -626,7 +654,7 @@ class PDF(FPDF):
                 self.multi_cell(186, 4.2, t, align='L')
                 curr_y = self.get_y() + 1
 
-        # DRAW CONFIDENCE
+        # 10. DRAW CONFIDENCE
         if confidence_el:
             txt = safe_get_text(confidence_el)
             c_class = confidence_el.get('class', [])
@@ -694,17 +722,15 @@ def parse_and_generate_pdf(html_content):
         pdf.draw_notice_box(title + ": " + txt, style='warning')
         alert.attrs['processed'] = True
 
-    # 1. Market Positioning Dashboard
     dash_h2 = soup.find(lambda tag: tag.name in ['h2', 'h3'] and 'Market Positioning Dashboard' in tag.text)
     if dash_h2:
-        dash_card = dash_h2.find_next('div', class_='dashboard-card')
+        dash_card = dash_h2.find_next('div', class_=['index-card', 'dashboard-card'])
         if dash_card:
             pdf.section_header("Market Positioning Dashboard (Quantified)", new_page=False)
             pdf.draw_dashboard_card(dash_card)
             dash_card.attrs['processed'] = True
             dash_h2.attrs['processed'] = True
 
-    # 2. Main Tabs
     tabs = [
         ('tab-index', "Index Analysis — EGX30", False),
         ('tab-market', "Market Trend (Internal Structure)", False),
@@ -735,14 +761,12 @@ def parse_and_generate_pdf(html_content):
             
             if element.name == 'p' and (element.parent == tab or 'section' in element.parent.get('class', [])):
                 txt = safe_get_text(element)
-                if len(txt) > 10:
+                if len(txt) > 5:
                     style = 'warning' if ('reduce' in tab_id or 'Distribute' in txt or 'Note:' in txt) else 'neutral'
                     pdf.draw_notice_box(txt, style=style)
                 processed_ids.add(el_id)
                 
             elif 'setup-card' in c_class or 'watchlist-item' in c_class:
-                
-                # STRICT EXCLUSION FILTER: Ignores unwanted tables/notes sections
                 header = element.find(class_='setup-header')
                 if header:
                     ticker = safe_get_text(header.find(class_='ticker'))
@@ -753,7 +777,7 @@ def parse_and_generate_pdf(html_content):
 
                 if cards_on_page >= 2 and tab_id not in ['tab-index', 'tab-market', 'tab-notes']:
                     pdf.add_page()
-                    pdf.set_y(30)
+                    pdf.set_y(34)
                     pdf.set_font('Arial', 'I', 8)
                     pdf.set_text_color(150, 150, 150)
                     pdf.cell(0, 4, f"{title} (Continued)", 0, 1, 'R')
@@ -780,7 +804,6 @@ def parse_and_generate_pdf(html_content):
                 for child in element.find_all(True): processed_ids.add(id(child))
                 processed_ids.add(el_id)
 
-    # 3. Disclaimer
     disclaimer = soup.find(class_='disclaimer')
     if disclaimer:
         pdf.draw_disclaimer(disclaimer)
