@@ -277,16 +277,15 @@ class PDF(FPDF):
             elif child.name in ['ul', 'ol']:
                 for li in child.find_all('li'):
                     txt = "- " + safe_get_text(li)
-                    # Perfect hanging indent height calculation
-                    if ':' in txt and txt.index(':') < 30:
+                    if ':' in txt and txt.index(':') < 20:
                         parts = txt.split(':', 1)
                         self.set_font('Arial', 'B', 8.5)
-                        w_pref = self.get_string_width(parts[0] + ':') + 1
+                        w_pref = self.get_string_width(parts[0] + ':')
                         self.set_font('Arial', '', 8.5)
-                        w_avail = 186 - w_pref
+                        w_avail = 198 - 14 - w_pref
                         lines = len(self.multi_cell(w_avail, 4.2, " " + parts[1].lstrip(), split_only=True))
                     else:
-                        lines = len(self.multi_cell(186, 4.2, txt, split_only=True))
+                        lines = len(self.multi_cell(182, 4.2, txt, split_only=True))
                     h_needed += (lines * 4.2) + 2
                     elements.append(('li', txt, lines))
                 
@@ -325,40 +324,32 @@ class PDF(FPDF):
                 curr_y += 5.5
             elif el[0] == 'li':
                 txt = el[1]
-                
-                # Dynamic Radar Text Coloring
                 if re.search(r'\+\d+\.?\d*%', txt): self.set_text_color(39, 174, 96)
                 elif re.search(r'-\d+\.?\d*%', txt): self.set_text_color(231, 76, 60)
                 else: self.set_text_color(60, 60, 60)
                 
-                # Perfect Hanging Indent Execution
-                if ':' in txt and txt.index(':') < 30:
+                if ':' in txt and txt.index(':') < 15:
                     parts = txt.split(':', 1)
                     prefix = parts[0] + ':'
                     suffix = " " + parts[1].lstrip()
-                    
                     self.set_font('Arial', 'B', 8.5)
-                    w_prefix = self.get_string_width(prefix) + 1
-                    
-                    self.set_xy(12, curr_y)
+                    w_prefix = self.get_string_width(prefix)
+                    self.set_xy(14, curr_y)
                     self.cell(w_prefix, 4.2, prefix, 0, 0, 'L')
-                    
                     orig_margin = self.l_margin
-                    self.set_left_margin(12 + w_prefix)
-                    self.set_xy(12 + w_prefix, curr_y)
+                    self.set_left_margin(14 + w_prefix)
+                    self.set_xy(14 + w_prefix, curr_y)
                     self.set_font('Arial', '', 8.5)
-                    self.multi_cell(186 - w_prefix, 4.2, suffix, align='L')
+                    self.multi_cell(198 - 14 - w_prefix, 4.2, suffix, align='L')
                     self.set_left_margin(orig_margin)
                 else:
-                    self.set_xy(12, curr_y)
+                    self.set_xy(14, curr_y)
                     self.set_font('Arial', '', 8.5)
-                    self.multi_cell(186, 4.2, txt, align='L')
-                    
+                    self.multi_cell(182, 4.2, txt, align='L')
                 curr_y += (el[2] * 4.2) + 2
                 
         self.set_y(start_y + h_needed + 3)
 
-    # REINTRODUCED MISSING METHOD
     def draw_market_assessment(self, soup):
         self.reset_state()
         title = safe_get_text(soup.find('h3'))
@@ -390,6 +381,42 @@ class PDF(FPDF):
             curr_y = self.get_y() + 2
             
         self.set_y(start_y + h_needed + 3)
+
+    def draw_risk_summary_box(self, risk_data):
+        self.reset_state()
+        h_needed = 38 
+        self.check_page_break(h_needed)
+        start_y = self.get_y()
+        
+        self.set_fill_color(231, 76, 60)
+        self.rect(8, start_y, 194, h_needed, 'F')
+        
+        self.set_xy(8, start_y + 2)
+        self.set_font('Arial', 'B', 11)
+        self.set_text_color(255, 255, 255)
+        self.cell(194, 5, "Risk Assessment", 0, 1, 'C')
+        
+        self.set_font('Arial', 'B', 12)
+        self.cell(194, 5, clean_text(risk_data.get('score', 'Risk Score: N/A')), 0, 1, 'C')
+        self.set_font('Arial', '', 9)
+        self.cell(194, 4, clean_text(risk_data.get('env', '')), 0, 1, 'C')
+        
+        box_y = self.get_y() + 3
+        self.set_fill_color(255, 255, 255)
+        self.rect(12, box_y, 186, 16, 'F')
+        
+        self.set_xy(12, box_y + 2)
+        self.set_text_color(192, 57, 43) 
+        self.set_font('Arial', 'B', 9)
+        combo_txt = f"{clean_text(risk_data.get('exposure', ''))}  |  {clean_text(risk_data.get('allocation', ''))}"
+        self.cell(186, 4, combo_txt, 0, 1, 'C')
+        
+        self.set_xy(14, box_y + 7)
+        self.set_font('Arial', '', 7.5)
+        self.set_text_color(100, 100, 100)
+        self.multi_cell(182, 3.5, clean_text(risk_data.get('details', '')), align='C')
+        
+        self.set_y(start_y + h_needed + 2)
 
     def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
@@ -578,7 +605,6 @@ class PDF(FPDF):
                     elif 'trend-bear' in t or 'Exit' in t or 'Breakdown' in t: self.set_text_color(231, 76, 60)
                     else: self.set_text_color(60, 60, 60)
                 
-                # Perfect Hanging Indent Implementation
                 if ':' in t and t.index(':') < 40:
                     parts = t.split(':', 1)
                     prefix = parts[0] + ':'
@@ -660,7 +686,6 @@ class PDF(FPDF):
                 self.multi_cell(186, 4.2, t, align='L')
                 curr_y += 4.2 + 1
                 
-        # TABLE RENDERER
         if table_rows:
             curr_y += 2
             col_w = [18, 55, 38, 38, 37] 
@@ -802,4 +827,75 @@ def parse_and_generate_pdf(html_content):
                 if len(txt) > 5:
                     style = 'warning' if ('reduce' in tab_id or 'Distribute' in txt or 'Note:' in txt) else 'neutral'
                     pdf.draw_notice_box(txt, style=style)
-                processed_ids.
+                processed_ids.add(el_id)
+                
+            elif 'index-card' in c_class and 'dashboard-card' not in c_class:
+                pdf.draw_index_card(element)
+                for child in element.find_all(True): processed_ids.add(id(child))
+                processed_ids.add(el_id)
+                
+            elif 'market-assessment' in c_class:
+                pdf.draw_market_assessment(element)
+                for child in element.find_all(True): processed_ids.add(id(child))
+                processed_ids.add(el_id)
+                
+            elif 'setup-card' in c_class or 'watchlist-item' in c_class:
+                if cards_on_page >= 2 and tab_id not in ['tab-index', 'tab-market', 'tab-notes']:
+                    pdf.add_page()
+                    pdf.set_y(30)
+                    pdf.set_font('Arial', 'I', 8)
+                    pdf.set_text_color(150, 150, 150)
+                    pdf.cell(0, 4, f"{title} (Continued)", 0, 1, 'R')
+                    pdf.ln(2)
+                    cards_on_page = 0
+                
+                start_page = pdf.page_no()
+                pdf.draw_setup_card(element, is_watchlist=('watch' in tab_id or 'watchlist' in c_class))
+                end_page = pdf.page_no()
+                
+                if end_page > start_page:
+                    cards_on_page = 1
+                else:
+                    cards_on_page += 1
+                
+                for child in element.find_all(True): processed_ids.add(id(child))
+                processed_ids.add(el_id)
+                
+            elif 'watchlist' in c_class and 'watchlist-item' not in c_class:
+                intro = element.find('p', recursive=False)
+                if intro: 
+                    pdf.draw_notice_box(safe_get_text(intro))
+                    processed_ids.add(id(intro))
+                processed_ids.add(el_id)
+
+    disclaimer = soup.find(class_='disclaimer')
+    if disclaimer:
+        pdf.draw_disclaimer(disclaimer)
+
+    return pdf
+
+# --- 4. STREAMLIT APP ---
+st.set_page_config(page_title="BlueberryAI Formatter", layout="centered")
+st.title("📄 BlueberryAI PDF Generator")
+st.write("Upload your HTML report to generate a pixel-perfect styled PDF.")
+
+uploaded_file = st.file_uploader("Choose HTML file", type="html")
+
+if uploaded_file is not None:
+    if st.button("Generate PDF"):
+        with st.spinner("Parsing HTML and Rendering PDF..."):
+            try:
+                bytes_data = uploaded_file.getvalue()
+                try: html_content = bytes_data.decode("utf-8")
+                except: html_content = bytes_data.decode("latin-1", errors="ignore")
+                
+                pdf = parse_and_generate_pdf(html_content)
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    pdf.output(tmp.name)
+                    with open(tmp.name, "rb") as f: pdf_bytes = f.read()
+                
+                st.success("PDF Generated Successfully!")
+                st.download_button("📥 Download Styled PDF", pdf_bytes, "BlueberryAI_Market_Report.pdf", "application/pdf")
+            except Exception as e:
+                st.error(f"Error processing file: {e}")
