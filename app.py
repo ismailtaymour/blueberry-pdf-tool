@@ -9,7 +9,7 @@ import math
 def clean_text(text):
     if not text: return ""
     text = text.replace('\n', ' ').replace('\t', ' ').replace('\r', ' ')
-    # Nuke non-breaking spaces that break FPDF text wrapping
+    # Fix non-breaking spaces that break FPDF text wrapping
     text = text.replace('\xa0', ' ').replace('\u00A0', ' ')
     text = re.sub(r'\s+', ' ', text).strip()
     replacements = {
@@ -61,7 +61,6 @@ class PDF(FPDF):
         # Multi-cell wrapper prevents off-page bleeding
         self.multi_cell(190, 4.2, self.subtitle_text, align='C')
         
-        # Lock cursor safely below the expanded header
         self.set_y(38)
 
     def footer(self):
@@ -132,13 +131,18 @@ class PDF(FPDF):
         h_tag = soup.find(['h3', 'h2'])
         title_text = safe_get_text(h_tag) if h_tag else "Internal Market Map"
         
+        # 1. Parse Top Row
         top_items = []
-        dash_row = soup.find(class_='dash-row')
-        if dash_row:
-            boxes = dash_row.find_all(class_='dash-box')
+        top_container = soup.find(class_=['dash-row', 'dash-top'])
+        if not top_container:
+            top_container = soup.find('div', style=lambda s: s and 'display:flex' in s.replace(' ', ''))
+            
+        if top_container:
+            boxes = top_container.find_all(class_=['dash-box', 'param-box'])
             for b in boxes:
-                lbl = safe_get_text(b.find(class_='dash-label'))
-                val_node = b.find(class_='dash-value')
+                lbl_node = b.find(class_=['dash-label', 'param-label'])
+                val_node = b.find(class_=['dash-value', 'param-value'])
+                lbl = safe_get_text(lbl_node)
                 val = safe_get_text(val_node)
                 color = (44, 62, 80)
                 if val_node and val_node.has_attr('style'):
@@ -146,20 +150,24 @@ class PDF(FPDF):
                     if match: color = hex_to_rgb(match.group(1))
                 top_items.append({'label': lbl, 'val': val, 'color': color})
                 
+        # 2. Parse Bottom Row
         bottom_items = []
-        count_row = soup.find(class_='count-row')
-        if count_row:
-            boxes = count_row.find_all(['div'], class_='count-box')
+        bottom_container = soup.find(class_=['count-row', 'dash-counts', 'trade-params'])
+        if bottom_container:
+            boxes = bottom_container.find_all(['div'], class_=['count-box', 'param-box'])
             for b in boxes:
-                bottom_items.append({
-                    'label': safe_get_text(b.find(class_='dash-label')),
-                    'val': safe_get_text(b.find(class_='dash-value'))
-                })
+                lbl = safe_get_text(b.find(class_=['dash-label', 'param-label']))
+                val = safe_get_text(b.find(class_=['dash-value', 'param-value']))
+                bottom_items.append({'label': lbl, 'val': val})
                     
-        rat_node = soup.find(class_=['interp', 'rationale'])
+        # 3. Parse Rationale & Notes
+        rat_node = soup.find(class_=['interp', 'rationale', 'interp-box'])
         rat_txt = safe_get_text(rat_node)
         
         note_p = soup.find('p', string=lambda s: s and 'Note:' in s)
+        if not note_p:
+            note_p = soup.find('strong', string=lambda s: s and 'Note:' in s)
+            if note_p: note_p = note_p.parent
         note_txt = safe_get_text(note_p)
 
         self.set_font('Arial', '', 8.5)
@@ -175,13 +183,14 @@ class PDF(FPDF):
         self.check_page_break(h_needed)
         start_y = self.get_y()
         
+        # Draw Background
         self.set_fill_color(247, 243, 255)
         self.set_draw_color(230, 220, 245)
         self.rect(8, start_y, 194, h_needed, 'DF')
         
         self.set_xy(12, start_y + 4)
         self.set_font('Arial', 'B', 12)
-        self.set_text_color(91, 44, 131) 
+        self.set_text_color(91, 44, 131)
         self.cell(0, 6, title_text, 0, 1, 'L')
         self.set_draw_color(155, 89, 182)
         self.line(12, self.get_y(), 198, self.get_y())
@@ -411,6 +420,7 @@ class PDF(FPDF):
     def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
         
+        # 1. HEADER EXTRACTION
         header = card_soup.find(class_='setup-header')
         if header:
             ticker = safe_get_text(header.find(class_='ticker'))
@@ -438,6 +448,7 @@ class PDF(FPDF):
         
         is_radar = 'Radar' in ticker or 'Behavioral' in badge_txt
             
+        # 2. PARAMS & DETAILS
         parsed_params = []
         details_texts = []
         extra_texts = []
@@ -456,9 +467,7 @@ class PDF(FPDF):
                 parsed_params.append({'label': lbl, 'val': val, 'color': color})
                 
         for child in card_soup.find_all(['p', 'li']):
-            if child.find_parent(class_=['trade-params', 'rationale', 'confidence', 'coverage-table']) or child.find_parent('table'): 
-                continue
-                
+            if child.find_parent(class_=['trade-params', 'rationale', 'confidence']): continue
             prefix = "- " if child.name == 'li' else ""
             txt = safe_get_text(child)
             if not txt: continue
@@ -491,6 +500,7 @@ class PDF(FPDF):
         rationale_el = card_soup.find(class_='rationale')
         confidence_el = card_soup.find(class_=lambda c: c and 'confidence' in c)
         
+        # 3. EXACT HEIGHT & WRAPPING GRID CALCULATION
         self.set_font('Arial', '', 8.5)
         
         h_details = 0
@@ -615,7 +625,7 @@ class PDF(FPDF):
                     self.multi_cell(186, 4.2, t, align='L')
                     curr_y = self.get_y() + 2
                     
-            curr_y = start_y + 13 + h_details + 1.5
+            curr_y = self.get_y() + 1.5
 
         # DRAW PARAMS 
         if parsed_params:
@@ -665,7 +675,7 @@ class PDF(FPDF):
             self.multi_cell(184, 4.2, safe_get_text(rationale_el), align='L')
             curr_y += h_rationale
 
-        # DRAW EXTRAS (Uses strictly get_y() to prevent overlapping Confidence badge)
+        # DRAW EXTRAS (Dynamic Y-tracking fixes overlapping bug)
         if extra_texts:
             curr_y += 1
             self.set_font('Arial', 'B', 8.5)
@@ -692,6 +702,7 @@ class PDF(FPDF):
             w_txt = self.get_string_width(txt) + 8
             self.rect(12, curr_y + 1, w_txt, 6, 'F')
             self.cell(w_txt, 6, txt, 0, 1, 'C')
+            curr_y = self.get_y() + 6
 
         self.set_y(start_y + total_height + 4)
 
@@ -741,7 +752,6 @@ def parse_and_generate_pdf(html_content):
     pdf.set_auto_page_break(auto=False) 
     pdf.add_page()
 
-    # Alerts
     alert = soup.find(class_='alert-box')
     if alert:
         title = safe_get_text(alert.find(['h3', 'h4'])) or "ALERT"
@@ -796,18 +806,16 @@ def parse_and_generate_pdf(html_content):
                 
             elif 'setup-card' in c_class or 'watchlist-item' in c_class:
                 
-                # STRICT FILTRATION ENGINE
+                # STRICT FILTRATION ENGINE (Ignores unwanted cards)
                 header = element.find(class_='setup-header')
                 if header:
                     ticker_txt = safe_get_text(header.find(class_='ticker')).lower()
                     
-                    # Ignore Technical Market Notes & Coverage Summary globally
                     if "technical market notes" in ticker_txt or "coverage summary" in ticker_txt:
                         element.attrs['processed'] = True
                         for child in element.find_all(True): processed_ids.add(id(child))
                         continue
                     
-                    # In Market Notes tab, ONLY allow Big Move Radar
                     if tab_id == 'tab-notes' and "big move radar" not in ticker_txt:
                         element.attrs['processed'] = True
                         for child in element.find_all(True): processed_ids.add(id(child))
