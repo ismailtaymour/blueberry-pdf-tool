@@ -34,8 +34,9 @@ def hex_to_rgb(hex_color):
 
 # --- 2. COMPACT PDF ENGINE ---
 class PDF(FPDF):
-    def __init__(self, subtitle_text=""):
+    def __init__(self, main_title="BlueberryAI - Market Intelligence Report", subtitle_text=""):
         super().__init__()
+        self.main_title = main_title
         self.subtitle_text = subtitle_text
 
     def header(self):
@@ -46,7 +47,7 @@ class PDF(FPDF):
         self.set_font('Arial', 'B', 15) 
         self.set_text_color(255, 255, 255)
         self.set_xy(10, 5)
-        self.cell(0, 6, 'BlueberryAI - Market Intelligence Report', 0, 1, 'C')
+        self.cell(0, 6, self.main_title, 0, 1, 'C')
         
         self.set_font('Arial', '', 8)
         self.set_xy(10, 11)
@@ -127,7 +128,8 @@ class PDF(FPDF):
     def draw_dashboard_card(self, soup):
         self.reset_state()
         
-        h_tag = soup.find(['h3', 'h2'])
+        # Look specifically for h3, fallback to generic if only h2 is found
+        h_tag = soup.find('h3')
         title_text = safe_get_text(h_tag) if h_tag else "Internal Market Map"
         
         # Parse Top Row
@@ -149,7 +151,7 @@ class PDF(FPDF):
                     if match: color = hex_to_rgb(match.group(1))
                 top_items.append({'label': lbl, 'val': val, 'color': color})
                 
-        # Parse Bottom Row (Added count-label / count-value for EGX70 compatibility)
+        # Parse Bottom Row 
         bottom_items = []
         bottom_container = soup.find(class_=['counts-row', 'count-row', 'dash-counts', 'trade-params'])
         if bottom_container:
@@ -362,7 +364,7 @@ class PDF(FPDF):
                 elif re.search(r'-\d+\.?\d*%', txt): self.set_text_color(231, 76, 60)
                 else: self.set_text_color(60, 60, 60)
                 
-                if ':' in txt and txt.index(':') < 20:
+                if ':' in txt and txt.index(':') < 15:
                     parts = txt.split(':', 1)
                     prefix = parts[0] + ':'
                     suffix = " " + parts[1].lstrip()
@@ -419,6 +421,7 @@ class PDF(FPDF):
     def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
         
+        # 1. HEADER EXTRACTION
         header = card_soup.find(class_='setup-header')
         if header:
             ticker = safe_get_text(header.find(class_='ticker'))
@@ -446,6 +449,7 @@ class PDF(FPDF):
         
         is_radar = 'Radar' in ticker or 'Behavioral' in badge_txt
             
+        # 2. PARAMS & DETAILS
         parsed_params = []
         details_texts = []
         extra_texts = []
@@ -463,14 +467,14 @@ class PDF(FPDF):
                     elif 'e74c3c' in st or 'red' in st: color = (231, 76, 60)
                 parsed_params.append({'label': lbl, 'val': val, 'color': color})
                 
-        # Support for specific invalidation div in Watchlist cards
+        # Handle explicit invalidation box
         inv_node = card_soup.find(class_='invalidation')
         if inv_node:
             inv_txt = safe_get_text(inv_node)
             if inv_txt not in extra_texts: extra_texts.append(inv_txt)
                 
         for child in card_soup.find_all(['p', 'li']):
-            if child.find_parent(class_=['trade-params', 'rationale', 'confidence', 'coverage-table']) or child.find_parent('table') or child.find_parent(class_='invalidation'): 
+            if child.find_parent(class_=['trade-params', 'rationale', 'confidence', 'coverage-table', 'invalidation']) or child.find_parent('table'): 
                 continue
                 
             prefix = "- " if child.name == 'li' else ""
@@ -552,14 +556,17 @@ class PDF(FPDF):
             
         h_params = sum(row_heights) + (len(row_heights) * 2) + 4 if params_count > 0 else 0
 
+        # Exact boundary mapping
         total_height = 14 + h_details + h_params + h_rationale + h_extras + (8 if confidence_el else 0) + 4
         self.check_page_break(total_height)
         start_y = self.get_y()
         
+        # DRAW BG
         self.set_fill_color(255, 255, 255)
         self.set_draw_color(230, 230, 230)
         self.rect(8, start_y, 194, total_height, 'DF')
         
+        # DRAW HEADER
         self.set_xy(12, start_y + 3)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(44, 62, 80)
@@ -583,6 +590,7 @@ class PDF(FPDF):
         self.line(10, start_y + 11, 200, start_y + 11)
         curr_y = start_y + 13
         
+        # DRAW DETAILS
         if details_texts:
             self.set_fill_color(248, 249, 250)
             self.rect(10, curr_y, 190, h_details, 'F')
@@ -627,6 +635,7 @@ class PDF(FPDF):
                     
             curr_y = self.get_y() + 1.5
 
+        # DRAW PARAMS 
         if parsed_params:
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
@@ -661,6 +670,7 @@ class PDF(FPDF):
                 
             curr_y += h_params
 
+        # DRAW RATIONALE
         if rationale_el:
             self.set_fill_color(232, 244, 248) 
             self.rect(10, curr_y, 190, h_rationale, 'F')
@@ -673,6 +683,7 @@ class PDF(FPDF):
             self.multi_cell(184, 4.2, safe_get_text(rationale_el), align='L')
             curr_y += h_rationale
 
+        # DRAW EXTRAS 
         if extra_texts:
             curr_y += 1
             self.set_font('Arial', 'B', 8.5)
@@ -682,6 +693,7 @@ class PDF(FPDF):
                 self.multi_cell(186, 4.2, t, align='L')
                 curr_y = self.get_y() + 1
 
+        # DRAW CONFIDENCE
         if confidence_el:
             txt = safe_get_text(confidence_el)
             c_class = confidence_el.get('class', [])
@@ -736,15 +748,20 @@ class PDF(FPDF):
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
+    # Grab Main Title
+    h1_tag = soup.find('h1')
+    main_title = safe_get_text(h1_tag) if h1_tag else "BlueberryAI - Market Intelligence Report"
+    
+    # Grab Subtitle
     date_el = soup.find(class_='date')
     if date_el:
         for br in date_el.find_all('br'):
             br.replace_with(' | ')
         subtitle = safe_get_text(date_el)
     else:
-        subtitle = "Market Report"
+        subtitle = "AI-Generated Market Analysis | For Informational Purposes Only"
 
-    pdf = PDF(subtitle)
+    pdf = PDF(main_title=main_title, subtitle_text=subtitle)
     pdf.set_auto_page_break(auto=False) 
     pdf.add_page()
 
@@ -755,17 +772,18 @@ def parse_and_generate_pdf(html_content):
         pdf.draw_notice_box(title + ": " + txt, style='warning')
         alert.attrs['processed'] = True
 
-    dash_h2 = soup.find(lambda tag: tag.name in ['h2', 'h3'] and 'Market Positioning Dashboard' in tag.text)
-    if dash_h2:
-        dash_card = dash_h2.find_next('div', class_=['index-card', 'dashboard-card'])
-        if dash_card:
-            pdf.section_header("Market Positioning Dashboard (Quantified)", new_page=False)
-            pdf.draw_dashboard_card(dash_card)
-            dash_card.attrs['processed'] = True
-            dash_h2.attrs['processed'] = True
+    # 1. Market Positioning Dashboard
+    dash_card = soup.find('div', class_='dashboard-card')
+    if dash_card:
+        pdf.section_header("Market Positioning Dashboard (Quantified)", new_page=False)
+        pdf.draw_dashboard_card(dash_card)
+        dash_card.attrs['processed'] = True
+        parent_sec = dash_card.find_parent('div', class_='section')
+        if parent_sec: parent_sec.attrs['processed'] = True
 
+    # 2. Main Tabs
     tabs = [
-        ('tab-index', "Index Analysis — EGX70", False),
+        ('tab-index', "Index Analysis — EGX", False),
         ('tab-market', "Market Trend (Internal Structure)", False),
         ('tab-buy', "Top Opportunities", True),
         ('tab-open', "Open Positions Management", True),
@@ -808,6 +826,7 @@ def parse_and_generate_pdf(html_content):
                 
             elif 'setup-card' in c_class or 'watchlist-item' in c_class or 'watchlist-card' in c_class:
                 
+                # STRICT FILTRATION ENGINE
                 header = element.find(class_='setup-header')
                 if header:
                     ticker_txt = safe_get_text(header.find(class_='ticker')).lower()
