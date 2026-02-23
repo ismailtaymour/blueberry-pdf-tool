@@ -46,7 +46,7 @@ class PDF(FPDF):
         self.set_font('Arial', 'B', 15) 
         self.set_text_color(255, 255, 255)
         self.set_xy(10, 5)
-        self.cell(0, 6, 'BlueberryAI - EGX30 Market Intelligence', 0, 1, 'C')
+        self.cell(0, 6, 'BlueberryAI - EGX70 Market Intelligence', 0, 1, 'C')
         
         self.set_font('Arial', '', 8)
         self.set_xy(10, 11)
@@ -770,7 +770,7 @@ def parse_and_generate_pdf(html_content):
 
     # 2. Main Tabs
     tabs = [
-        ('tab-index', "Index Analysis — EGX30", False),
+        ('tab-index', "Index Analysis — EGX70", False),
         ('tab-market', "Market Trend (Internal Structure)", False),
         ('tab-buy', "Top Opportunities", True),
         ('tab-open', "Open Positions Management", True),
