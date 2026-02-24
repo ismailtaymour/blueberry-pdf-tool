@@ -9,7 +9,7 @@ import math
 def clean_text(text):
     if not text: return ""
     text = text.replace('\n', ' ').replace('\t', ' ').replace('\r', ' ')
-    # Fix non-breaking spaces that break FPDF text wrapping
+    # Fix non-breaking spaces
     text = text.replace('\xa0', ' ').replace('\u00A0', ' ')
     text = re.sub(r'\s+', ' ', text).strip()
     replacements = {
@@ -34,31 +34,31 @@ def hex_to_rgb(hex_color):
 
 # --- 2. COMPACT PDF ENGINE ---
 class PDF(FPDF):
-    def __init__(self, main_title="BlueberryAI - Market Intelligence Report", subtitle_text=""):
+    def __init__(self, main_title="BlueberryAI Market Report", subtitle_text=""):
         super().__init__()
         self.main_title = main_title
         self.subtitle_text = subtitle_text
 
     def header(self):
-        # Expanded header height to safely accommodate multi-line subtitles
+        # Expanded header height
         self.set_fill_color(44, 62, 80)
         self.rect(0, 0, 210, 36, 'F') 
         
-        self.set_font('Arial', 'B', 15) 
+        self.set_font('Arial', 'B', 14) 
         self.set_text_color(255, 255, 255)
-        self.set_xy(10, 5)
+        self.set_xy(10, 6)
         self.cell(0, 6, self.main_title, 0, 1, 'C')
         
         self.set_font('Arial', '', 8)
-        self.set_xy(10, 11)
+        self.set_xy(10, 12)
         self.cell(0, 4, 'AI-Generated Market Analysis | For Informational Purposes Only', 0, 1, 'C')
         
         self.set_draw_color(100, 110, 120)
-        self.line(40, 16, 170, 16) 
+        self.line(40, 17, 170, 17) 
         
         self.set_font('Arial', '', 7.5)
         self.set_text_color(200, 200, 200)
-        self.set_xy(10, 18)
+        self.set_xy(10, 19)
         self.multi_cell(190, 4.2, self.subtitle_text, align='C')
         
         self.set_y(38)
@@ -128,11 +128,10 @@ class PDF(FPDF):
     def draw_dashboard_card(self, soup):
         self.reset_state()
         
-        # Look specifically for h3, fallback to generic if only h2 is found
-        h_tag = soup.find('h3')
+        h_tag = soup.find(['h3', 'h2'])
         title_text = safe_get_text(h_tag) if h_tag else "Internal Market Map"
         
-        # Parse Top Row
+        # 1. Parse Top Row
         top_items = []
         top_container = soup.find(class_=['dash-row', 'dash-top'])
         if not top_container:
@@ -151,7 +150,7 @@ class PDF(FPDF):
                     if match: color = hex_to_rgb(match.group(1))
                 top_items.append({'label': lbl, 'val': val, 'color': color})
                 
-        # Parse Bottom Row 
+        # 2. Parse Bottom Row (Supports count-label/value for EGX70)
         bottom_items = []
         bottom_container = soup.find(class_=['counts-row', 'count-row', 'dash-counts', 'trade-params'])
         if bottom_container:
@@ -161,7 +160,7 @@ class PDF(FPDF):
                 val = safe_get_text(b.find(class_=['dash-value', 'param-value', 'count-value']))
                 bottom_items.append({'label': lbl, 'val': val})
                     
-        # Parse Rationale & Notes
+        # 3. Parse Rationale & Notes
         rat_node = soup.find(class_=['interp', 'rationale', 'interp-box'])
         rat_txt = safe_get_text(rat_node)
         
@@ -347,7 +346,7 @@ class PDF(FPDF):
                 self.set_font('Arial', 'B' if 'Strong' in el[1] or 'Bullish' in el[1] else '', 8.5)
                 self.set_text_color(*el[2])
                 self.multi_cell(186, 4.2, el[1], align='L')
-                curr_y = self.get_y() + 2
+                curr_y += (el[3] * 4.2) + 2
             elif el[0] == 'metric':
                 self.set_xy(12, curr_y)
                 self.set_font('Arial', 'B', 8.5)
@@ -382,7 +381,7 @@ class PDF(FPDF):
                     self.set_xy(14, curr_y)
                     self.set_font('Arial', '', 8.5)
                     self.multi_cell(182, 4.2, txt, align='L')
-                curr_y = self.get_y() + 2
+                curr_y += (el[2] * 4.2) + 2
                 
         self.set_y(start_y + h_needed + 3)
 
@@ -421,7 +420,6 @@ class PDF(FPDF):
     def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
         
-        # 1. HEADER EXTRACTION
         header = card_soup.find(class_='setup-header')
         if header:
             ticker = safe_get_text(header.find(class_='ticker'))
@@ -449,7 +447,6 @@ class PDF(FPDF):
         
         is_radar = 'Radar' in ticker or 'Behavioral' in badge_txt
             
-        # 2. PARAMS & DETAILS
         parsed_params = []
         details_texts = []
         extra_texts = []
@@ -556,17 +553,14 @@ class PDF(FPDF):
             
         h_params = sum(row_heights) + (len(row_heights) * 2) + 4 if params_count > 0 else 0
 
-        # Exact boundary mapping
         total_height = 14 + h_details + h_params + h_rationale + h_extras + (8 if confidence_el else 0) + 4
         self.check_page_break(total_height)
         start_y = self.get_y()
         
-        # DRAW BG
         self.set_fill_color(255, 255, 255)
         self.set_draw_color(230, 230, 230)
         self.rect(8, start_y, 194, total_height, 'DF')
         
-        # DRAW HEADER
         self.set_xy(12, start_y + 3)
         self.set_font('Arial', 'B', 12)
         self.set_text_color(44, 62, 80)
@@ -590,7 +584,6 @@ class PDF(FPDF):
         self.line(10, start_y + 11, 200, start_y + 11)
         curr_y = start_y + 13
         
-        # DRAW DETAILS
         if details_texts:
             self.set_fill_color(248, 249, 250)
             self.rect(10, curr_y, 190, h_details, 'F')
@@ -635,7 +628,6 @@ class PDF(FPDF):
                     
             curr_y = self.get_y() + 1.5
 
-        # DRAW PARAMS 
         if parsed_params:
             self.set_fill_color(253, 235, 245) 
             self.rect(10, curr_y, 190, h_params, 'F')
@@ -670,7 +662,6 @@ class PDF(FPDF):
                 
             curr_y += h_params
 
-        # DRAW RATIONALE
         if rationale_el:
             self.set_fill_color(232, 244, 248) 
             self.rect(10, curr_y, 190, h_rationale, 'F')
@@ -683,7 +674,6 @@ class PDF(FPDF):
             self.multi_cell(184, 4.2, safe_get_text(rationale_el), align='L')
             curr_y += h_rationale
 
-        # DRAW EXTRAS 
         if extra_texts:
             curr_y += 1
             self.set_font('Arial', 'B', 8.5)
@@ -693,7 +683,6 @@ class PDF(FPDF):
                 self.multi_cell(186, 4.2, t, align='L')
                 curr_y = self.get_y() + 1
 
-        # DRAW CONFIDENCE
         if confidence_el:
             txt = safe_get_text(confidence_el)
             c_class = confidence_el.get('class', [])
@@ -748,18 +737,17 @@ class PDF(FPDF):
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Grab Main Title
+    # Dynamic Title Extraction
     h1_tag = soup.find('h1')
     main_title = safe_get_text(h1_tag) if h1_tag else "BlueberryAI - Market Intelligence Report"
     
-    # Grab Subtitle
     date_el = soup.find(class_='date')
     if date_el:
         for br in date_el.find_all('br'):
             br.replace_with(' | ')
         subtitle = safe_get_text(date_el)
     else:
-        subtitle = "AI-Generated Market Analysis | For Informational Purposes Only"
+        subtitle = "Market Report"
 
     pdf = PDF(main_title=main_title, subtitle_text=subtitle)
     pdf.set_auto_page_break(auto=False) 
@@ -772,18 +760,27 @@ def parse_and_generate_pdf(html_content):
         pdf.draw_notice_box(title + ": " + txt, style='warning')
         alert.attrs['processed'] = True
 
-    # 1. Market Positioning Dashboard
-    dash_card = soup.find('div', class_='dashboard-card')
-    if dash_card:
-        pdf.section_header("Market Positioning Dashboard (Quantified)", new_page=False)
-        pdf.draw_dashboard_card(dash_card)
-        dash_card.attrs['processed'] = True
-        parent_sec = dash_card.find_parent('div', class_='section')
-        if parent_sec: parent_sec.attrs['processed'] = True
+    # 1. Market Positioning Dashboard (Robust EGX70/EGX30 Detection)
+    dash_h2 = soup.find(lambda tag: tag.name in ['h2', 'h3'] and 'Market Positioning Dashboard' in tag.text)
+    if dash_h2:
+        # Check parent (EGX70 style)
+        parent_card = dash_h2.find_parent(class_=['dashboard-card', 'index-card'])
+        if parent_card:
+            dash_card = parent_card
+        else:
+            # Check next sibling (EGX30 style)
+            dash_card = dash_h2.find_next('div', class_=['index-card', 'dashboard-card'])
+            
+        if dash_card:
+            pdf.section_header("Market Positioning Dashboard (Quantified)", new_page=False)
+            pdf.draw_dashboard_card(dash_card)
+            dash_card.attrs['processed'] = True
+            dash_h2.attrs['processed'] = True
+            parent_sec = dash_card.find_parent('div', class_='section')
+            if parent_sec: parent_sec.attrs['processed'] = True
 
-    # 2. Main Tabs
     tabs = [
-        ('tab-index', "Index Analysis — EGX", False),
+        ('tab-index', "Index Analysis", False),
         ('tab-market', "Market Trend (Internal Structure)", False),
         ('tab-buy', "Top Opportunities", True),
         ('tab-open', "Open Positions Management", True),
@@ -816,7 +813,7 @@ def parse_and_generate_pdf(html_content):
                     style = 'warning' if ('reduce' in tab_id or 'Distribute' in txt or 'Note:' in txt) else 'neutral'
                     pdf.draw_notice_box(txt, style=style)
                 processed_ids.add(el_id)
-                
+            
             elif 'no-signal-box' in c_class:
                 txt = safe_get_text(element)
                 pdf.draw_notice_box(txt, style='neutral')
