@@ -16,7 +16,7 @@ def clean_text(text):
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '📊': '', 
         '📈': '', '🎯': '', '💼': '', '⚠️': '', '👀': '', '📝': '', '📐': '',
-        '•': '-', '\u2022': '-' 
+        '•': '-', '\u2022': '-', '📌': ''
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
@@ -27,6 +27,7 @@ def safe_get_text(element):
     return clean_text(element.get_text(" ", strip=True))
 
 def hex_to_rgb(hex_color):
+    if not hex_color: return (44, 62, 80)
     hex_color = hex_color.replace(' ', '').lstrip('#')
     if len(hex_color) == 3: hex_color = ''.join([c*2 for c in hex_color])
     if len(hex_color) == 6: return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
@@ -40,7 +41,6 @@ class PDF(FPDF):
         self.subtitle_text = subtitle_text
 
     def header(self):
-        # Expanded header height
         self.set_fill_color(44, 62, 80)
         self.rect(0, 0, 210, 36, 'F') 
         
@@ -131,9 +131,10 @@ class PDF(FPDF):
         h_tag = soup.find(['h3', 'h2'])
         title_text = safe_get_text(h_tag) if h_tag else "Internal Market Map"
         
-        # 1. Parse Top Row
+        # 1. Parse Top Row (Handles both 'dash-row' and 'dash-top')
         top_items = []
         top_container = soup.find(class_=['dash-row', 'dash-top'])
+        # Fallback for flex style if no class match
         if not top_container:
             top_container = soup.find('div', style=lambda s: s and 'display:flex' in s.replace(' ', ''))
             
@@ -144,20 +145,22 @@ class PDF(FPDF):
                 val_node = b.find(class_=['dash-value', 'param-value'])
                 lbl = safe_get_text(lbl_node)
                 val = safe_get_text(val_node)
+                
+                # Check for inline color style
                 color = (44, 62, 80)
                 if val_node and val_node.has_attr('style'):
                     match = re.search(r'color:\s*(#[0-9a-fA-F]{3,6})', val_node['style'].replace(' ', ''))
                     if match: color = hex_to_rgb(match.group(1))
                 top_items.append({'label': lbl, 'val': val, 'color': color})
                 
-        # 2. Parse Bottom Row (Supports count-label/value for EGX70)
+        # 2. Parse Bottom Row (Handles 'counts-row', 'count-row', 'dash-counts')
         bottom_items = []
         bottom_container = soup.find(class_=['counts-row', 'count-row', 'dash-counts', 'trade-params'])
         if bottom_container:
-            boxes = bottom_container.find_all(['div'], class_=['count-box', 'param-box'])
+            boxes = bottom_container.find_all(['div'], class_=['count-box', 'param-box', 'counts-box'])
             for b in boxes:
-                lbl = safe_get_text(b.find(class_=['dash-label', 'param-label', 'count-label']))
-                val = safe_get_text(b.find(class_=['dash-value', 'param-value', 'count-value']))
+                lbl = safe_get_text(b.find(class_=['dash-label', 'param-label', 'count-label', 'counts-label']))
+                val = safe_get_text(b.find(class_=['dash-value', 'param-value', 'count-value', 'counts-value']))
                 bottom_items.append({'label': lbl, 'val': val})
                     
         # 3. Parse Rationale & Notes
@@ -737,7 +740,7 @@ class PDF(FPDF):
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Dynamic Title Extraction
+    # Dynamic Header Extraction
     h1_tag = soup.find('h1')
     main_title = safe_get_text(h1_tag) if h1_tag else "BlueberryAI - Market Intelligence Report"
     
@@ -760,25 +763,25 @@ def parse_and_generate_pdf(html_content):
         pdf.draw_notice_box(title + ": " + txt, style='warning')
         alert.attrs['processed'] = True
 
-    # 1. Market Positioning Dashboard (Robust EGX70/EGX30 Detection)
-    dash_h2 = soup.find(lambda tag: tag.name in ['h2', 'h3'] and 'Market Positioning Dashboard' in tag.text)
-    if dash_h2:
-        # Check parent (EGX70 style)
-        parent_card = dash_h2.find_parent(class_=['dashboard-card', 'index-card'])
-        if parent_card:
-            dash_card = parent_card
-        else:
-            # Check next sibling (EGX30 style)
+    # 1. Market Positioning Dashboard (Robust Detection)
+    # Check for dashboard-card explicitly anywhere in the doc
+    dash_card = soup.find('div', class_='dashboard-card')
+    if not dash_card:
+        # Fallback to index-card if dashboard header is inside it
+        dash_h2 = soup.find(lambda tag: tag.name in ['h2', 'h3'] and 'Market Positioning Dashboard' in tag.text)
+        if dash_h2:
             dash_card = dash_h2.find_next('div', class_=['index-card', 'dashboard-card'])
-            
-        if dash_card:
-            pdf.section_header("Market Positioning Dashboard (Quantified)", new_page=False)
-            pdf.draw_dashboard_card(dash_card)
-            dash_card.attrs['processed'] = True
-            dash_h2.attrs['processed'] = True
-            parent_sec = dash_card.find_parent('div', class_='section')
-            if parent_sec: parent_sec.attrs['processed'] = True
+            # Check if it's the parent (EGX70 style)
+            if not dash_card:
+                parent = dash_h2.find_parent(class_=['dashboard-card', 'index-card'])
+                if parent: dash_card = parent
+    
+    if dash_card:
+        pdf.section_header("Market Positioning Dashboard (Quantified)", new_page=False)
+        pdf.draw_dashboard_card(dash_card)
+        dash_card.attrs['processed'] = True
 
+    # 2. Main Tabs
     tabs = [
         ('tab-index', "Index Analysis", False),
         ('tab-market', "Market Trend (Internal Structure)", False),
@@ -807,18 +810,20 @@ def parse_and_generate_pdf(html_content):
             
             c_class = element.get('class', [])
             
+            # Universal text boxes (like "No Signal")
+            if 'no-signal-box' in c_class:
+                txt = safe_get_text(element)
+                pdf.draw_notice_box(txt, style='neutral')
+                element.attrs['processed'] = True
+                for child in element.find_all(True): processed_ids.add(id(child))
+                processed_ids.add(el_id)
+                continue
+
             if element.name == 'p' and (element.parent == tab or 'section' in element.parent.get('class', [])):
                 txt = safe_get_text(element)
                 if len(txt) > 5:
                     style = 'warning' if ('reduce' in tab_id or 'Distribute' in txt or 'Note:' in txt) else 'neutral'
                     pdf.draw_notice_box(txt, style=style)
-                processed_ids.add(el_id)
-            
-            elif 'no-signal-box' in c_class:
-                txt = safe_get_text(element)
-                pdf.draw_notice_box(txt, style='neutral')
-                element.attrs['processed'] = True
-                for child in element.find_all(True): processed_ids.add(id(child))
                 processed_ids.add(el_id)
                 
             elif 'setup-card' in c_class or 'watchlist-item' in c_class or 'watchlist-card' in c_class:
