@@ -16,7 +16,7 @@ def clean_text(text):
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '📊': '', 
         '📈': '', '🎯': '', '💼': '', '⚠️': '', '👀': '', '📝': '', '📐': '',
-        '•': '-', '\u2022': '-', '📌': ''
+        '•': '-', '\u2022': '-' 
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
@@ -131,10 +131,9 @@ class PDF(FPDF):
         h_tag = soup.find(['h3', 'h2'])
         title_text = safe_get_text(h_tag) if h_tag else "Internal Market Map"
         
-        # 1. Parse Top Row (Handles both 'dash-row' and 'dash-top')
+        # 1. Parse Top Row (Broad search for any dash/param box)
         top_items = []
         top_container = soup.find(class_=['dash-row', 'dash-top'])
-        # Fallback for flex style if no class match
         if not top_container:
             top_container = soup.find('div', style=lambda s: s and 'display:flex' in s.replace(' ', ''))
             
@@ -143,24 +142,29 @@ class PDF(FPDF):
             for b in boxes:
                 lbl_node = b.find(class_=['dash-label', 'param-label'])
                 val_node = b.find(class_=['dash-value', 'param-value'])
+                if not lbl_node or not val_node: continue
+                
                 lbl = safe_get_text(lbl_node)
                 val = safe_get_text(val_node)
                 
-                # Check for inline color style
                 color = (44, 62, 80)
-                if val_node and val_node.has_attr('style'):
+                if val_node.has_attr('style'):
                     match = re.search(r'color:\s*(#[0-9a-fA-F]{3,6})', val_node['style'].replace(' ', ''))
                     if match: color = hex_to_rgb(match.group(1))
                 top_items.append({'label': lbl, 'val': val, 'color': color})
                 
-        # 2. Parse Bottom Row (Handles 'counts-row', 'count-row', 'dash-counts')
+        # 2. Parse Bottom Row (Broad search for counts/params)
         bottom_items = []
         bottom_container = soup.find(class_=['counts-row', 'count-row', 'dash-counts', 'trade-params'])
         if bottom_container:
             boxes = bottom_container.find_all(['div'], class_=['count-box', 'param-box', 'counts-box'])
             for b in boxes:
-                lbl = safe_get_text(b.find(class_=['dash-label', 'param-label', 'count-label', 'counts-label']))
-                val = safe_get_text(b.find(class_=['dash-value', 'param-value', 'count-value', 'counts-value']))
+                lbl_node = b.find(class_=['dash-label', 'param-label', 'count-label', 'counts-label'])
+                val_node = b.find(class_=['dash-value', 'param-value', 'count-value', 'counts-value'])
+                if not lbl_node or not val_node: continue
+                
+                lbl = safe_get_text(lbl_node)
+                val = safe_get_text(val_node)
                 bottom_items.append({'label': lbl, 'val': val})
                     
         # 3. Parse Rationale & Notes
@@ -217,9 +221,6 @@ class PDF(FPDF):
                 self.set_xy(x, curr_y + 5.5)
                 self.set_font('Arial', 'B', 9)
                 self.set_text_color(*item['color'])
-                
-                if self.get_string_width(item['val']) > box_w - 2:
-                    self.set_font('Arial', 'B', 7.5)
                 self.cell(box_w, 5, item['val'], 0, 1, 'C')
             curr_y += 15
             
@@ -740,7 +741,7 @@ class PDF(FPDF):
 def parse_and_generate_pdf(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Dynamic Header Extraction
+    # Dynamic Title Extraction
     h1_tag = soup.find('h1')
     main_title = safe_get_text(h1_tag) if h1_tag else "BlueberryAI - Market Intelligence Report"
     
@@ -780,6 +781,9 @@ def parse_and_generate_pdf(html_content):
         pdf.section_header("Market Positioning Dashboard (Quantified)", new_page=False)
         pdf.draw_dashboard_card(dash_card)
         dash_card.attrs['processed'] = True
+        # Mark parent section as processed so it doesn't duplicate
+        parent_sec = dash_card.find_parent('div', class_='section')
+        if parent_sec: parent_sec.attrs['processed'] = True
 
     # 2. Main Tabs
     tabs = [
@@ -804,13 +808,20 @@ def parse_and_generate_pdf(html_content):
         processed_ids = set()
         cards_on_page = 0 
         
+        # Add special check for 'Note' inside Open Positions
+        if tab_id == 'tab-open':
+            intro_note = tab.find('p', style=lambda s: s and 'background' in s)
+            if intro_note and 'processed' not in intro_note.attrs:
+                pdf.draw_notice_box(safe_get_text(intro_note))
+                intro_note.attrs['processed'] = True
+                processed_ids.add(id(intro_note))
+
         for element in tab.find_all(['div', 'p']):
             el_id = id(element)
             if el_id in processed_ids or 'processed' in element.attrs: continue
             
             c_class = element.get('class', [])
             
-            # Universal text boxes (like "No Signal")
             if 'no-signal-box' in c_class:
                 txt = safe_get_text(element)
                 pdf.draw_notice_box(txt, style='neutral')
