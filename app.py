@@ -16,7 +16,7 @@ def clean_text(text):
         '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
         '\u2013': '-', '\u2014': '-', '\u2026': '...', '📊': '', 
         '📈': '', '🎯': '', '💼': '', '⚠️': '', '👀': '', '📝': '', '📐': '',
-        '•': '-', '\u2022': '-' 
+        '•': '-', '\u2022': '-', '🔭': '', '🐻': '', '🐮': ''
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
@@ -131,9 +131,9 @@ class PDF(FPDF):
         h_tag = soup.find(['h3', 'h2'])
         title_text = safe_get_text(h_tag) if h_tag else "Internal Market Map"
         
-        # 1. Parse Top Row (Broad search for any dash/param box)
+        # 1. Parse Top Row (Added 'dash-grid' support)
         top_items = []
-        top_container = soup.find(class_=['dash-row', 'dash-top'])
+        top_container = soup.find(class_=['dash-row', 'dash-top', 'dash-grid'])
         if not top_container:
             top_container = soup.find('div', style=lambda s: s and 'display:flex' in s.replace(' ', ''))
             
@@ -153,9 +153,9 @@ class PDF(FPDF):
                     if match: color = hex_to_rgb(match.group(1))
                 top_items.append({'label': lbl, 'val': val, 'color': color})
                 
-        # 2. Parse Bottom Row (Broad search for counts/params)
+        # 2. Parse Bottom Row (Added 'count-grid' support)
         bottom_items = []
-        bottom_container = soup.find(class_=['counts-row', 'count-row', 'dash-counts', 'trade-params'])
+        bottom_container = soup.find(class_=['counts-row', 'count-row', 'dash-counts', 'trade-params', 'count-grid'])
         if bottom_container:
             boxes = bottom_container.find_all(['div'], class_=['count-box', 'param-box', 'counts-box'])
             for b in boxes:
@@ -424,6 +424,7 @@ class PDF(FPDF):
     def draw_setup_card(self, card_soup, is_watchlist=False):
         self.reset_state()
         
+        # 1. HEADER EXTRACTION
         header = card_soup.find(class_='setup-header')
         if header:
             ticker = safe_get_text(header.find(class_='ticker'))
@@ -808,13 +809,14 @@ def parse_and_generate_pdf(html_content):
         processed_ids = set()
         cards_on_page = 0 
         
-        # Add special check for 'Note' inside Open Positions
+        # New Feature: Explicitly grab notes from Open Positions Tab
         if tab_id == 'tab-open':
-            intro_note = tab.find('p', style=lambda s: s and 'background' in s)
-            if intro_note and 'processed' not in intro_note.attrs:
-                pdf.draw_notice_box(safe_get_text(intro_note))
-                intro_note.attrs['processed'] = True
-                processed_ids.add(id(intro_note))
+            for note_p in tab.find_all('p', style=True):
+                if 'background' in note_p.get('style', ''):
+                    txt = safe_get_text(note_p)
+                    pdf.draw_notice_box(txt, style='neutral')
+                    note_p.attrs['processed'] = True
+                    processed_ids.add(id(note_p))
 
         for element in tab.find_all(['div', 'p']):
             el_id = id(element)
@@ -822,6 +824,7 @@ def parse_and_generate_pdf(html_content):
             
             c_class = element.get('class', [])
             
+            # Universal text boxes (like "No Signal")
             if 'no-signal-box' in c_class:
                 txt = safe_get_text(element)
                 pdf.draw_notice_box(txt, style='neutral')
